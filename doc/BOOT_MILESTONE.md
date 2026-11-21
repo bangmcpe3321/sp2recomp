@@ -33,7 +33,7 @@ computed `.bss` base `0x2fdc000`. MOD0 is a replacement for `PT_DYNAMIC`, not a
 program entry.
 
 Any document in this repo that quotes a "MOD0 entry point" should be disregarded.
-The [README](README.md) has been corrected accordingly.
+The [README](../README.md) has been corrected accordingly.
 
 ---
 

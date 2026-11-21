@@ -7,8 +7,8 @@
 import { readFileSync, writeFileSync } from "node:fs";
 
 const sitesPath = process.argv[2] ?? "all-callsites.txt";
-const worklistPath = process.argv[3] ?? "C:/Users/Hexa/Documents/nintendo/sp2decomp/PORT_WORKLIST.md";
-const outPath = process.argv[4] ?? "PLATFORM_IMPLEMENTATION_SPEC.md";
+const worklistPath = process.argv[3] ?? "doc/PORT_WORKLIST.md";
+const outPath = process.argv[4] ?? "doc/PLATFORM_IMPLEMENTATION_SPEC.md";
 
 // ---- the platform function names we care about --------------------------
 // from PORT_WORKLIST.md (nn::os / nn::mem / nn::init / nn::vi / nn::time / ...)

@@ -33,7 +33,7 @@ là đối tượng module trong `.bss` — nhất quán với `BssStartOffset` 
 điểm vào của chương trình.
 
 Bất kỳ tài liệu nào trong kho này trích dẫn "MOD0 entry point" đều nên bị bỏ qua.
-[README](README.md) đã được sửa lại cho đúng.
+[README](../README.md) đã được sửa lại cho đúng.
 
 ---
 

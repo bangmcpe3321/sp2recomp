@@ -211,25 +211,25 @@ Sáu bản sửa đã đưa bản port từ lỗi fatal khi boot đến trạng 
 
 | Bạn muốn biết | Xem tại |
 |---|---|
-| Điều gì đã biết, điều gì chưa biết và nên đọc theo thứ tự nào | [STATUS.md](STATUS.md) |
-| Bản port hiện render được đến đâu | [RECOMP_BOOT_TO_UI.md](RECOMP_BOOT_TO_UI.md) |
-| Chuỗi khởi động đã giải mã | [BOOT_CALLGRAPH.md](BOOT_CALLGRAPH.md) |
-| Toàn bộ module `main` trong một tài liệu | [ENGINE_REFERENCE.md](ENGINE_REFERENCE.md) |
+| Điều gì đã biết, điều gì chưa biết và nên đọc theo thứ tự nào | [STATUS.md](doc/STATUS.md) |
+| Bản port hiện render được đến đâu | [RECOMP_BOOT_TO_UI.md](doc/RECOMP_BOOT_TO_UI.md) |
+| Chuỗi khởi động đã giải mã | [BOOT_CALLGRAPH.md](doc/BOOT_CALLGRAPH.md) |
+| Toàn bộ module `main` trong một tài liệu | [ENGINE_REFERENCE.md](doc/ENGINE_REFERENCE.md) |
 
 ### Port
 
-- Phạm vi và mục tiêu: [PORTING.md](PORTING.md), [BOOT_MILESTONE.md](BOOT_MILESTONE.md), [BOOT_ENGINE_ORDER.md](BOOT_ENGINE_ORDER.md)
-- Worklist và hợp đồng nền tảng: [PORT_WORKLIST.md](PORT_WORKLIST.md), [PLATFORM_IMPLEMENTATION_SPEC.md](PLATFORM_IMPLEMENTATION_SPEC.md), [PLATFORM_REFERENCE.md](PLATFORM_REFERENCE.md)
-- Vị trí của platform layer: [PLATFORM_LAYER_LOCATION.md](PLATFORM_LAYER_LOCATION.md)
-- Đường đi đồ họa: [GRAPHICS_NVN.md](GRAPHICS_NVN.md), [GRAPHICS_SCOPE.md](GRAPHICS_SCOPE.md)
+- Phạm vi và mục tiêu: [PORTING.md](doc/PORTING.md), [BOOT_MILESTONE.md](doc/BOOT_MILESTONE.md), [BOOT_ENGINE_ORDER.md](doc/BOOT_ENGINE_ORDER.md)
+- Worklist và hợp đồng nền tảng: [PORT_WORKLIST.md](doc/PORT_WORKLIST.md), [PLATFORM_IMPLEMENTATION_SPEC.md](doc/PLATFORM_IMPLEMENTATION_SPEC.md), [PLATFORM_REFERENCE.md](doc/PLATFORM_REFERENCE.md)
+- Vị trí của platform layer: [PLATFORM_LAYER_LOCATION.md](doc/PLATFORM_LAYER_LOCATION.md)
+- Đường đi đồ họa: [GRAPHICS_NVN.md](doc/GRAPHICS_NVN.md), [GRAPHICS_SCOPE.md](doc/GRAPHICS_SCOPE.md)
 
 ### Bối cảnh và phạm vi bao phủ
 
-- Engine và middleware: [ENGINE_RECONSTRUCTION.md](ENGINE_RECONSTRUCTION.md), [SEAD_COVERAGE.md](SEAD_COVERAGE.md), [NNWARE_COVERAGE.md](NNWARE_COVERAGE.md), [AGL_COVERAGE.md](AGL_COVERAGE.md)
-- Module `sdk`: [SDK_ANALYSIS.md](SDK_ANALYSIS.md), [SDK_REFERENCE.md](SDK_REFERENCE.md)
-- Kiểm chứng layout: [VERIFICATION.md](VERIFICATION.md), [VTABLE_VERIFICATION.md](VTABLE_VERIFICATION.md)
-- Tooling và hướng decompile: [DECOMPILATION_UNBLOCKED.md](DECOMPILATION_UNBLOCKED.md), [DECOMPILED_BODIES.md](DECOMPILED_BODIES.md)
-- Khảo sát hệ sinh thái rộng hơn: [ECOSYSTEM.md](ECOSYSTEM.md), [subsystem-map.txt](subsystem-map.txt)
+- Engine và middleware: [ENGINE_RECONSTRUCTION.md](doc/ENGINE_RECONSTRUCTION.md), [SEAD_COVERAGE.md](doc/SEAD_COVERAGE.md), [NNWARE_COVERAGE.md](doc/NNWARE_COVERAGE.md), [AGL_COVERAGE.md](doc/AGL_COVERAGE.md)
+- Module `sdk`: [SDK_ANALYSIS.md](doc/SDK_ANALYSIS.md), [SDK_REFERENCE.md](doc/SDK_REFERENCE.md)
+- Kiểm chứng layout: [VERIFICATION.md](doc/VERIFICATION.md), [VTABLE_VERIFICATION.md](doc/VTABLE_VERIFICATION.md)
+- Tooling và hướng decompile: [DECOMPILATION_UNBLOCKED.md](doc/DECOMPILATION_UNBLOCKED.md), [DECOMPILED_BODIES.md](doc/DECOMPILED_BODIES.md)
+- Khảo sát hệ sinh thái rộng hơn: [ECOSYSTEM.md](doc/ECOSYSTEM.md), [subsystem-map.txt](subsystem-map.txt)
 
 ## Trong tài liệu này
 
@@ -252,7 +252,7 @@ Sáu bản sửa đã đưa bản port từ lỗi fatal khi boot đến trạng 
 | Phân rã subsystem | Xong (55 namespace) |
 | Nhận dạng engine & middleware | Xong |
 | **Decompile thân hàm** | **Chưa xong** — xem [Hạn chế](#hạn-chế) |
-| **Bản port PC biên dịch lại** | Boot đến UI trong game: `RootTask::prepare_`, display loop, tạo nhân vật PlayerMake, màn hình tiêu đề 1920×1080 và tutorial lần đầu — [RECOMP_BOOT_TO_UI.md](RECOMP_BOOT_TO_UI.md). Tutorial vượt qua aim/ZR với chữ hướng dẫn đọc được, còn căn phòng 3D trung tâm 960×540 của trang Move cũng render được. Ranh giới tutorial → plaza đang được kiểm tra: patch idempotent chuyển `5 → 6` của tutorial sang warp state 7, còn handoff thực tế `4 → 5` của UI/page manager 21 trạng thái load scene tin tức Off the Hook (entry state 5 của bảng cũ là null vì chuyển tiếp tạo page manager mới). Đường vòng `4 → 7` trước đây đến màn hình chọn gear rồi dừng tại state 9 null; đó là đường chẩn đoán, không phải đường đến plaza. Plaza 3D vẫn chưa được xác nhận; scene tin tức và hai host render trong viewport trung tâm 960×540. Khoảng một phần ba số lần boot bị dừng ở chuyển tiếp UI job nhân vật → tutorial. |
+| **Bản port PC biên dịch lại** | Boot đến UI trong game: `RootTask::prepare_`, display loop, tạo nhân vật PlayerMake, màn hình tiêu đề 1920×1080 và tutorial lần đầu — [RECOMP_BOOT_TO_UI.md](doc/RECOMP_BOOT_TO_UI.md). Tutorial vượt qua aim/ZR với chữ hướng dẫn đọc được, còn căn phòng 3D trung tâm 960×540 của trang Move cũng render được. Ranh giới tutorial → plaza đang được kiểm tra: patch idempotent chuyển `5 → 6` của tutorial sang warp state 7, còn handoff thực tế `4 → 5` của UI/page manager 21 trạng thái load scene tin tức Off the Hook (entry state 5 của bảng cũ là null vì chuyển tiếp tạo page manager mới). Đường vòng `4 → 7` trước đây đến màn hình chọn gear rồi dừng tại state 9 null; đó là đường chẩn đoán, không phải đường đến plaza. Plaza 3D vẫn chưa được xác nhận; scene tin tức và hai host render trong viewport trung tâm 960×540. Khoảng một phần ba số lần boot bị dừng ở chuyển tiếp UI job nhân vật → tutorial. |
 
 Mọi nội dung bên dưới là phân tích tĩnh binary đã phát hành, trừ khi một mục ghi rõ
 khác đi; các phát hiện runtime từ bản port được đánh dấu tương ứng. Chỉ khẳng
@@ -322,7 +322,7 @@ Header module `MOD0` nằm tại **`.text+0x8`**. Theo
 > **Đính chính.** Một bản trước của README này suy ra “entry VA” từ
 > `entryTarget + entryOffset` bằng hai offset `0x10`/`0x14`. Hai trường đó là
 > metadata xử lý ngoại lệ. MOD0 **không có entry point**; module được vào thông
-> qua dynamic section. Xem [BOOT_MILESTONE.md](BOOT_MILESTONE.md) để biết chuỗi
+> qua dynamic section. Xem [BOOT_MILESTONE.md](doc/BOOT_MILESTONE.md) để biết chuỗi
 > khởi động thật.
 
 Dynamic section (VA `0x2f9a470`) chứa các con trỏ liên quan đến boot:

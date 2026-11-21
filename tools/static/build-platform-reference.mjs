@@ -6,9 +6,9 @@
 import { readFileSync, writeFileSync } from "node:fs";
 
 const decompPath = process.argv[2] ?? "platform-decompiled.txt";
-const worklistPath = process.argv[3] ?? "PORT_WORKLIST.md";
+const worklistPath = process.argv[3] ?? "doc/PORT_WORKLIST.md";
 const closurePath = process.argv[4] ?? "boot-closure.txt";
-const outPath = process.argv[5] ?? "PLATFORM_REFERENCE.md";
+const outPath = process.argv[5] ?? "doc/PLATFORM_REFERENCE.md";
 
 // Strip a UTF-8 BOM if present: PyGhidra writes one, and it defeats a ^0x match on
 // the first line of the file.

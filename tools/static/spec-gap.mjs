@@ -1,10 +1,10 @@
 // Compare spec coverage against the worklist.
 import { readFileSync } from "node:fs";
 
-const spec = readFileSync("PLATFORM_IMPLEMENTATION_SPEC.md", "utf8");
+const spec = readFileSync("doc/PLATFORM_IMPLEMENTATION_SPEC.md", "utf8");
 const covered = [...spec.matchAll(/^## `([A-Za-z0-9_]+)`/gm)].map((m) => m[1]);
 
-const wl = readFileSync("PORT_WORKLIST.md", "utf8");
+const wl = readFileSync("doc/PORT_WORKLIST.md", "utf8");
 const want = [];
 for (const ln of wl.split("\n")) {
   const m = /^\|\s*`(0x[0-9a-f]+)`\s*\|\s*`([^`]+)`/.exec(ln);

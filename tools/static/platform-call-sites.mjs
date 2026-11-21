@@ -134,7 +134,7 @@ out.push("  its arguments still has to be inferred from the caller's expectation
 out.push("- **No implementation of any of these was recovered**, because none exists in the");
 out.push("  dump. This document does not change that.");
 
-writeFileSync("PLATFORM_CALL_SITES.md", out.join("\n") + "\n");
+writeFileSync("doc/PLATFORM_CALL_SITES.md", out.join("\n") + "\n");
 console.log(`\nwrote PLATFORM_CALL_SITES.md`);
 console.log("\nnamespaces:");
 for (const [ns, items] of [...byNs.entries()].sort((a, b) => b[1].length - a[1].length)) {

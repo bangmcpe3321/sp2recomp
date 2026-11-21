@@ -41,7 +41,7 @@ callers require. The remaining ~46 imports are not yet written.
 
 ### 1. Start here — what the target is
 
-- **[README.md](README.md)** — target identification, memory map, subsystem survey.
+- **[README.md](../README.md)** — target identification, memory map, subsystem survey.
 - **[subsystem-map.txt](subsystem-map.txt)** — 109-subsystem breakdown (2.7 MB).
 
 ### 2. The port plan

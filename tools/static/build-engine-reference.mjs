@@ -7,7 +7,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 
 const decompPath = process.argv[2] ?? "engine-decompiled.txt";
 const closurePath = process.argv[3] ?? "boot-closure-fixed.txt";
-const outPath = process.argv[4] ?? "ENGINE_REFERENCE.md";
+const outPath = process.argv[4] ?? "doc/ENGINE_REFERENCE.md";
 const indexPath = process.argv[5] ?? "engine-addrs-index.txt";
 
 // Full namespace-qualified names. Ghidra strips the namespace from its output

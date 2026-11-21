@@ -259,26 +259,26 @@ Open:
 
 | What you want | Where to go |
 |---|---|
-| What is known, what is not, and in what order to read | [STATUS.md](STATUS.md) |
-| **Where the platform layer actually is — 51/51 provider map** | **[PLATFORM_LAYER_FOUND.md](PLATFORM_LAYER_FOUND.md)** |
-| How far the port gets on screen right now | [RECOMP_BOOT_TO_UI.md](RECOMP_BOOT_TO_UI.md) |
-| The decoded startup chain | [BOOT_CALLGRAPH.md](BOOT_CALLGRAPH.md) |
-| The whole `main` module in one document | [ENGINE_REFERENCE.md](ENGINE_REFERENCE.md) |
+| What is known, what is not, and in what order to read | [STATUS.md](doc/STATUS.md) |
+| **Where the platform layer actually is — 51/51 provider map** | **[PLATFORM_LAYER_FOUND.md](doc/PLATFORM_LAYER_FOUND.md)** |
+| How far the port gets on screen right now | [RECOMP_BOOT_TO_UI.md](doc/RECOMP_BOOT_TO_UI.md) |
+| The decoded startup chain | [BOOT_CALLGRAPH.md](doc/BOOT_CALLGRAPH.md) |
+| The whole `main` module in one document | [ENGINE_REFERENCE.md](doc/ENGINE_REFERENCE.md) |
 
 ### Porting
 
-- Scope and target: [PORTING.md](PORTING.md), [BOOT_MILESTONE.md](BOOT_MILESTONE.md), [BOOT_ENGINE_ORDER.md](BOOT_ENGINE_ORDER.md)
-- Worklist and platform contract: [PORT_WORKLIST.md](PORT_WORKLIST.md), [PLATFORM_IMPLEMENTATION_SPEC.md](PLATFORM_IMPLEMENTATION_SPEC.md), [PLATFORM_REFERENCE.md](PLATFORM_REFERENCE.md)
-- Where the platform layer lives: [PLATFORM_LAYER_LOCATION.md](PLATFORM_LAYER_LOCATION.md)
-- Graphics path: [GRAPHICS_NVN.md](GRAPHICS_NVN.md), [GRAPHICS_SCOPE.md](GRAPHICS_SCOPE.md)
+- Scope and target: [PORTING.md](doc/PORTING.md), [BOOT_MILESTONE.md](doc/BOOT_MILESTONE.md), [BOOT_ENGINE_ORDER.md](doc/BOOT_ENGINE_ORDER.md)
+- Worklist and platform contract: [PORT_WORKLIST.md](doc/PORT_WORKLIST.md), [PLATFORM_IMPLEMENTATION_SPEC.md](doc/PLATFORM_IMPLEMENTATION_SPEC.md), [PLATFORM_REFERENCE.md](doc/PLATFORM_REFERENCE.md)
+- Where the platform layer lives: [PLATFORM_LAYER_LOCATION.md](doc/PLATFORM_LAYER_LOCATION.md)
+- Graphics path: [GRAPHICS_NVN.md](doc/GRAPHICS_NVN.md), [GRAPHICS_SCOPE.md](doc/GRAPHICS_SCOPE.md)
 
 ### Background and coverage
 
-- Engine and middleware: [ENGINE_RECONSTRUCTION.md](ENGINE_RECONSTRUCTION.md), [SEAD_COVERAGE.md](SEAD_COVERAGE.md), [NNWARE_COVERAGE.md](NNWARE_COVERAGE.md), [AGL_COVERAGE.md](AGL_COVERAGE.md)
-- `sdk` module: [SDK_ANALYSIS.md](SDK_ANALYSIS.md), [SDK_REFERENCE.md](SDK_REFERENCE.md)
-- Layout verification: [VERIFICATION.md](VERIFICATION.md), [VTABLE_VERIFICATION.md](VTABLE_VERIFICATION.md)
-- Tooling and decompilation route: [DECOMPILATION_UNBLOCKED.md](DECOMPILATION_UNBLOCKED.md), [DECOMPILED_BODIES.md](DECOMPILED_BODIES.md)
-- Wider ecosystem survey: [ECOSYSTEM.md](ECOSYSTEM.md), [subsystem-map.txt](subsystem-map.txt)
+- Engine and middleware: [ENGINE_RECONSTRUCTION.md](doc/ENGINE_RECONSTRUCTION.md), [SEAD_COVERAGE.md](doc/SEAD_COVERAGE.md), [NNWARE_COVERAGE.md](doc/NNWARE_COVERAGE.md), [AGL_COVERAGE.md](doc/AGL_COVERAGE.md)
+- `sdk` module: [SDK_ANALYSIS.md](doc/SDK_ANALYSIS.md), [SDK_REFERENCE.md](doc/SDK_REFERENCE.md)
+- Layout verification: [VERIFICATION.md](doc/VERIFICATION.md), [VTABLE_VERIFICATION.md](doc/VTABLE_VERIFICATION.md)
+- Tooling and decompilation route: [DECOMPILATION_UNBLOCKED.md](doc/DECOMPILATION_UNBLOCKED.md), [DECOMPILED_BODIES.md](doc/DECOMPILED_BODIES.md)
+- Wider ecosystem survey: [ECOSYSTEM.md](doc/ECOSYSTEM.md), [subsystem-map.txt](subsystem-map.txt)
 
 ## In this document
 
@@ -301,7 +301,7 @@ Open:
 | Subsystem decomposition | Done (55 namespaces) |
 | Engine & middleware identification | Done |
 | **Function-body decompilation** | **Not done** — see [Limitations](#limitations) |
-| **Recompiled PC port** | Boots to the in-game UI: `RootTask::prepare_`, display loop, PlayerMake character creation, the title screen at 1920×1080, and the first-launch tutorial - [RECOMP_BOOT_TO_UI.md](RECOMP_BOOT_TO_UI.md). The tutorial advances past aim/ZR with legible guide text, and the Move page's central 960×540 3D room renders. The tutorial→plaza boundary is under test: an idempotent patch redirects the tutorial's `5 → 6` to warp state 7, and the 21-state UI/page manager's real `4 → 5` handoff loads the Off the Hook news scene (the old table's state-5 entry is null because the transition creates a new page manager). The earlier `4 → 7` detour reached the gear-selection screen and stalled at null state 9; it is a diagnostic, not the plaza path. The 3D plaza is still unconfirmed; the news scene and its two hosts render in the central 960×540 viewport. About one boot in three stalls at the character→tutorial UI job transition. |
+| **Recompiled PC port** | Boots to the in-game UI: `RootTask::prepare_`, display loop, PlayerMake character creation, the title screen at 1920×1080, and the first-launch tutorial - [RECOMP_BOOT_TO_UI.md](doc/RECOMP_BOOT_TO_UI.md). The tutorial advances past aim/ZR with legible guide text, and the Move page's central 960×540 3D room renders. The tutorial→plaza boundary is under test: an idempotent patch redirects the tutorial's `5 → 6` to warp state 7, and the 21-state UI/page manager's real `4 → 5` handoff loads the Off the Hook news scene (the old table's state-5 entry is null because the transition creates a new page manager). The earlier `4 → 7` detour reached the gear-selection screen and stalled at null state 9; it is a diagnostic, not the plaza path. The 3D plaza is still unconfirmed; the news scene and its two hosts render in the central 960×540 viewport. About one boot in three stalls at the character→tutorial UI job transition. |
 
 Everything below is static analysis of the shipped binary unless a section says
 otherwise; runtime findings from the port are labelled as such. Behaviour is only
@@ -376,7 +376,7 @@ replacement for `PT_DYNAMIC` and **contains no entry point**:
 > `entryTarget + entryOffset` using offsets `0x10`/`0x14`. Those fields are
 > exception-handling metadata. There is no entry point in MOD0; the module is
 > entered through the dynamic section. See
-> [BOOT_MILESTONE.md](BOOT_MILESTONE.md) for the real boot chain.
+> [BOOT_MILESTONE.md](doc/BOOT_MILESTONE.md) for the real boot chain.
 
 The dynamic section (VA `0x2f9a470`) carries the boot-relevant pointers:
 

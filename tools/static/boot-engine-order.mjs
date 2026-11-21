@@ -9,7 +9,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 
 const src = process.argv[2] ?? "main-decompiled.txt";
 const targetVa = (process.argv[3] ?? "0x71011f5b20").toLowerCase();
-const outPath = process.argv[4] ?? "boot-engine-order.md";
+const outPath = process.argv[4] ?? "doc/BOOT_ENGINE_ORDER.md";
 
 const text = readFileSync(src, "utf8").replace(/^\uFEFF/, "");
 let block = null;

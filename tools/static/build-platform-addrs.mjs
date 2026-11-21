@@ -2,7 +2,7 @@
 // straight from the worklist so the two never drift.
 import { readFileSync, writeFileSync } from "node:fs";
 
-const worklist = process.argv[2] ?? "PORT_WORKLIST.md";
+const worklist = process.argv[2] ?? "doc/PORT_WORKLIST.md";
 const outPath = process.argv[3] ?? "platform-addrs.txt";
 
 const text = readFileSync(worklist, "utf8");

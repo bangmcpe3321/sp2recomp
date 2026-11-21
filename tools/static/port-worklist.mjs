@@ -12,7 +12,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 
 const nsoPath = process.argv[2] ?? "main.elf";
 const invPath = process.argv[3] ?? "inventory.txt";
-const outPath = process.argv[4] ?? "PORT_WORKLIST.md";
+const outPath = process.argv[4] ?? "doc/PORT_WORKLIST.md";
 
 const b = readFileSync(nsoPath);
 const IMAGE_BASE = 0x7100000000n;

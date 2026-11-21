@@ -237,7 +237,7 @@ sound and input.
 
 - Reproducible extraction and analysis pipeline (already in `tools/`).
 - A decompiler workspace that survives the analysis stall documented in the
-  [README](README.md#limitations).
+  [README](../README.md#limitations).
 - Decide the language and toolchain for reimplemented code.
 
 ### Phase 1 — Platform layer (hardest, unavoidable)

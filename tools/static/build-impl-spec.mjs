@@ -6,7 +6,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 
 const src = process.argv[2] ?? "thunk-callers.txt";
-const outPath = process.argv[3] ?? "PLATFORM_IMPLEMENTATION_SPEC.md";
+const outPath = process.argv[3] ?? "doc/PLATFORM_IMPLEMENTATION_SPEC.md";
 
 const text = readFileSync(src, "utf8");
 

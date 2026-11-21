@@ -56,7 +56,7 @@ try {
 // And the older engine reference, which recorded name+address pairs.
 console.log("\n=== ENGINE_REFERENCE.md entries mentioning Foreground ===");
 try {
-  const ref = readFileSync("C:/Users/Hexa/Documents/nintendo/sp2decomp/ENGINE_REFERENCE.md", "utf8");
+  const ref = readFileSync("doc/ENGINE_REFERENCE.md", "utf8");
   const idx = ref.indexOf("Foreground");
   if (idx >= 0) console.log(ref.slice(Math.max(0, idx - 320), idx + 220));
   else console.log("  no mention");
