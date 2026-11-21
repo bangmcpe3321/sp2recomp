@@ -5,3 +5,5 @@
 *.js  text eol=lf
 *.py  text eol=lf
 *.tsv text eol=lf
+# Empty context lines in a unified diff intentionally contain a space.
+tools/patches/playermake-descriptor-winding.patch whitespace=-blank-at-eol

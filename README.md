@@ -12,6 +12,27 @@ used to establish it, and how far the port has got.
 
 ## Current state
 
+### PlayerMake rendering update — November 21, 2026
+
+The verified isolated Windows runs now render the Inklings' eyes, skin, hair,
+textured clothes and shoes. Two runtime fixes were required: preserve copied
+texture descriptors' own storage identity instead of following a reinitialized
+texture object, and stop flipping front-face winding just because a depth
+attachment is present. The empty fragment shaders were not the cause.
+
+![PlayerMake after the descriptor and winding fixes](docs/images/playermake-verified.png)
+
+*Late-frame replay from the isolated run: sampled live frames 300–6,300 remained
+correct. A separate run without RenderDoc or atlas-refresh overrides stayed
+correct through frame 3,000. One earlier concurrent-replay run went dark; that
+stress case remains unresolved. Tutorial and plaza rendering are not claimed fixed.*
+
+See [the measured fix and verification](docs/PLAYERMAKE_FIX.md), the
+[apply/restore helper](tools/patches/patch-playermake-descriptor-winding.py), and the
+[capture regression check](tools/verify-playermake-capture.py). The patch targets
+the separate `sp2port` runtime; this repository does not contain game assets or
+the generated game executable. Older screenshots and findings below are historical.
+
 The recompiled port runs the game's own code on Vulkan on Windows. The title screen renders at
 1920×1080. PlayerMake character creation completes with legible text, the intro cutscene plays,
 and the first-launch controller tutorial runs: the controller page renders whole (the Pro
@@ -103,9 +124,10 @@ missing shot state to state 7 is a detour into the PlayerMake UI, not the plaza 
 
 ![PlayerMake character creation, eye colour step](docs/images/boot-playermake-en.png)
 
-*PlayerMake, eye colour step ("Pick an eye color!"). Text is legible because the port stores the
-CPU-written R8 glyph atlas as packed rows instead of untiling it. The two Inkling models are
-still missing from the colour pass.*
+*Historical PlayerMake eye-colour capture ("Pick an eye color!"). Text is legible
+because the port stores the CPU-written R8 glyph atlas as packed rows instead of
+untiling it. The missing-model defect shown here is superseded by the verified
+descriptor/winding update above.*
 
 ![Character confirmation](docs/images/boot-confirm-text.png)
 
@@ -244,9 +266,9 @@ Open:
   ([tools/patches/patch-fss-loop-cap.py](tools/patches/patch-fss-loop-cap.py)) returns `0x131`
   after the cap, which keeps the job manager alive; the face removal and atlas handling are the
   real fix and remain open.
-- **Characters.** Submitted every frame as fully skinned draws with real model textures, and
-  the mask pass rasterises them (verified by target snapshots), but the visible colour pass
-  leaves no pixels.
+- **Characters (PlayerMake verified in isolated runs).** The descriptor/winding fix
+  restores the visible character materials; see the update above. Concurrent-replay
+  stress stability and character rendering in other scenes remain unverified.
 - **Device memory.** On the 6 GB laptop GPU the load still briefly peaks above the R11G11B10F
   savings: several runs log `vkAllocateMemory failed (-2)` around the character customisation
   load (live images 2.6 GB at frame 233) and either recover or stall. The live set fell to

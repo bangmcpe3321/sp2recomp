@@ -1,0 +1,479 @@
+diff --git a/runtime/src/nvn/nvn.h b/runtime/src/nvn/nvn.h
+index 916887d..26cffed 100644
+--- a/runtime/src/nvn/nvn.h
++++ b/runtime/src/nvn/nvn.h
+@@ -269,15 +269,27 @@ uint64_t texture_descriptor_ref(uint64_t guest);  // 0: not a descriptor copy
+ struct DescriptorFields {
+     uint64_t memory = 0;
+     uint32_t format = 0, target = 0, width = 0, height = 0, depth = 0, levels = 0, samples = 0, swizzle = 0;
++    uint64_t gpu = 0;
++    uint32_t flags = 0, pool_swizzle = 0, stride = 0, block_height_gobs = 0;
+ };
+ bool texture_descriptor_fields(uint64_t guest, DescriptorFields& out);  // false: not a descriptor copy
+ 
++// A command owns the descriptor it recorded, not the mutable object named by a guest copy.
++// Retired keys are collected by drain_objects, never from a recording-thread destructor.
++struct RecordedTexture {
++    uint64_t key = 0;
++    ~RecordedTexture();
++};
++std::shared_ptr<RecordedTexture> record_texture_descriptor(uint64_t guest);
++void drain_recorded_textures();  // under objects_lock
++
+ // A texture pool keeps a copy of each registered descriptor under a host key of this form (nvn_objects.cpp,
+ // make_snapshot): guest handles below it are textures, handles at or above it are those copies. A copy has the
+ // memory and shape of the texture as registered and an image only once something samples it (nvn_image.cpp).
+ constexpr uint64_t kSnapshot = 0xE000000000000000ull;
+ 
+ struct Texture : Object {
++    bool descriptor_copy = false;  // immutable descriptor, not a live object to follow after reinitialization
+     uint32_t target = 0, format = 0, flags = 0, levels = 0, samples = 0, depth_stencil_mode = 0;
+     uint32_t width = 0, height = 0, depth = 0, stride = 0;
+     uint64_t pool = 0, offset = 0, storage_size = 0;
+@@ -414,6 +426,7 @@ struct Cmd {
+ struct CmdList {
+     std::vector<Cmd> cmds;
+     std::vector<std::vector<uint8_t>> blobs;
++    std::vector<std::shared_ptr<RecordedTexture>> textures;
+     uint64_t handle = 0;     // its NVNcommandHandle
+     uint64_t epoch = 0;      // the texture epoch when its recording ended (nvn_incarnation.cpp): what its draws name
+     uint32_t skinned = 0;    // NX_TRACE_SKINLISTS: binds of skinned programs (a vertex input at location 6) in it
+@@ -466,7 +479,8 @@ std::shared_ptr<CmdList> command_list(uint64_t handle);  // a recorded handle's
+ std::string explain_handle(uint64_t handle);             // why a handle has no list (NX_CMD_DROPS=1: what dropped it)
+ void command_memory_released(uint64_t gpu, uint64_t size);  // a pool finalized: the lists recorded in it go
+ // Appends to the command buffer (guest NVNcommandBuffer*) being recorded; `blob` is copied into the list.
+-void record(uint64_t cmdbuf, Cmd cmd, const void* blob = nullptr, size_t size = 0);
++void record(uint64_t cmdbuf, Cmd cmd, const void* blob = nullptr, size_t size = 0,
++            std::vector<std::shared_ptr<RecordedTexture>> textures = {});
+ 
+ // ---- the GPU (nvn_vk.cpp) -------------------------------------------------------------------------------------
+ 
+diff --git a/runtime/src/nvn/nvn_cmd.cpp b/runtime/src/nvn/nvn_cmd.cpp
+index c3fef79..7b554c5 100644
+--- a/runtime/src/nvn/nvn_cmd.cpp
++++ b/runtime/src/nvn/nvn_cmd.cpp
+@@ -440,22 +440,29 @@ void SetRenderTargets(CPU& c) {
+     // binds. The same address therefore means different textures at different moments - in the news window
+     // 6a00fff368 alone names 12 of them (6a00ffe910, 6a00ffe940, 6a00ffe9f0, 6a00ffeb30, ...) inside ONE command
+     // buffer. Recording the address and resolving it while replaying reads whatever the guest wrote LAST, so
+-    // every pass that named that copy replayed into one 1920x1080 image instead of the target it asked for: the
+-    // studio's 1570x921 intermediates were never drawn into and stayed black (defect 1). The real driver copies
+-    // the descriptor into the command buffer when the command is recorded; this does the same.
++    // every pass that named that copy replayed into one image instead of the target it asked for. Keeping just the
++    // named object's address is insufficient too: the object may already have been reinitialized while an older
++    // descriptor copy still names its previous storage. Keep the copy's own fields for the lifetime of the list.
+     // NX_NO_RT_RESOLVE_AT_RECORD=1: the old behaviour (bisecting).
+-    //
+-    // Colour slots only. The DEPTH slot keeps its raw handle on purpose: image_of's synthetic_target
+-    // (nvn_image.cpp) needs the copy's own fields when the texture a depth copy names is gone or is now a colour
+-    // target, and pre-resolving it would defeat that.
+     static const bool rt_resolve_at_record = std::getenv("NX_NO_RT_RESOLVE_AT_RECORD") == nullptr;
++    std::vector<std::shared_ptr<RecordedTexture>> textures;
+     for (uint32_t k = 0; k < n && c.x[2]; k++) {
+         uint64_t tp = ld<uint64_t>(c.x[2] + 8 * k);
+-        if (rt_resolve_at_record && tp)
+-            if (uint64_t named = texture_descriptor_ref(tp); named && named != tp) tp = named;
++        if (rt_resolve_at_record && tp) {
++            if (auto texture = record_texture_descriptor(tp)) {
++                tp = texture->key;
++                textures.push_back(std::move(texture));
++            }
++        }
+         cmd.a[k] = tp;
+     }
+     cmd.a[8] = c.x[4];  // depth/stencil
++    if (rt_resolve_at_record && c.x[4]) {
++        if (auto texture = record_texture_descriptor(c.x[4])) {
++            cmd.a[8] = texture->key;
++            textures.push_back(std::move(texture));
++        }
++    }
+     // The views pick the level and layer rendered to (a bloom chain renders each mip of one texture in turn).
+     TargetViews tv;
+     for (uint32_t k = 0; k < n && c.x[3]; k++) {
+@@ -498,7 +505,7 @@ void SetRenderTargets(CPU& c) {
+                 }
+             }
+     }
+-    record(c.x[0], cmd, &tv, sizeof tv);
++    record(c.x[0], cmd, &tv, sizeof tv, std::move(textures));
+ }
+ 
+ void ClearColor(CPU& c) {
+@@ -548,7 +555,8 @@ void CallCommands(CPU& c) {
+ 
+ }  // namespace
+ 
+-void record(uint64_t guest, Cmd cmd, const void* blob, size_t size) {
++void record(uint64_t guest, Cmd cmd, const void* blob, size_t size,
++            std::vector<std::shared_ptr<RecordedTexture>> textures) {
+     auto* cb = get<CommandBuffer>(guest);
+     if (!cb) {
+         g_no_cb++;
+@@ -561,6 +569,7 @@ void record(uint64_t guest, Cmd cmd, const void* blob, size_t size) {
+         cb->recording->blobs.emplace_back(p, p + size);
+     }
+     cb->recording->cmds.push_back(cmd);
++    for (auto& texture : textures) cb->recording->textures.push_back(std::move(texture));
+ }
+ 
+ // A handle's list for the traces, without marking it used (which would keep it from being dropped).
+diff --git a/runtime/src/nvn/nvn_frames.cpp b/runtime/src/nvn/nvn_frames.cpp
+index 31ade86..d653a8e 100644
+--- a/runtime/src/nvn/nvn_frames.cpp
++++ b/runtime/src/nvn/nvn_frames.cpp
+@@ -676,6 +676,12 @@ Texture::~Texture() {
+     g_grave.push_back({g_submitted + 1, std::move(image)});
+ }
+ 
++void retire_image(std::shared_ptr<GpuImage> image) {
++    if (!image) return;
++    std::lock_guard lk(g_grave_lock);
++    g_grave.push_back({g_submitted + 1, std::move(image)});
++}
++
+ // A host-visible buffer of its own for one big texture upload: the ring is 256 MB, and a scene load with ASTC decoded
+ // to RGBA8 staged 312 MB in one submit, wrapping over its own data before the GPU had copied it (DEBUG-2 #72). Freed
+ // once the submit being recorded is retired (as images in the grave). Falls back to the ring if allocation fails.
+diff --git a/runtime/src/nvn/nvn_image.cpp b/runtime/src/nvn/nvn_image.cpp
+index 3f62222..0ef28f6 100644
+--- a/runtime/src/nvn/nvn_image.cpp
++++ b/runtime/src/nvn/nvn_image.cpp
+@@ -209,7 +209,7 @@ Texture* synthetic_target(uint64_t guest) {
+ 
+ }  // namespace
+ 
+-GpuImage* image_of(uint64_t guest) {
++static GpuImage* image_of_impl(uint64_t guest) {
+     Texture* t = get<Texture>(guest);
+     if (!t) t = synthetic_target(guest);  // PATCH-DEPTH-DESC-EMBEDDED
+     if (!t) {
+@@ -226,7 +226,7 @@ GpuImage* image_of(uint64_t guest) {
+     // texture of the same storage held the frame. A snapshot with no image, or with one the GPU never wrote, takes
+     // the live image of its storage instead. NX_NO_SNAPSHOT_SHARE=1: the old behaviour (bisecting).
+     static const bool share_snapshot = std::getenv("NX_NO_SNAPSHOT_SHARE") == nullptr;
+-    const bool snapshot = guest >= kSnapshot;
++    const bool snapshot = guest >= kSnapshot && !t->descriptor_copy;
+     GpuImage* own = t->image.get();
+     if (own && !(share_snapshot && snapshot && !own->rendered)) return own;
+     uint32_t swizzle = uint32_t(t->swizzle[0]) | uint32_t(t->swizzle[1]) << 8 | uint32_t(t->swizzle[2]) << 16 |
+@@ -523,6 +523,42 @@ GpuImage* image_of(uint64_t guest) {
+     return img.get();
+ }
+ 
++GpuImage* image_of(uint64_t guest) {
++    Texture* t = get<Texture>(guest);
++    if (!t || !t->descriptor_copy) return image_of_impl(guest);
++
++    // Retained command lists own metadata, not a GPU allocation for every historical
++    // resolution. Keep exact storage alive across the current frame's submits; old
++    // images retire through the existing fence-aware graveyard.
++    struct HeldImage {
++        std::shared_ptr<GpuImage> image;
++        uint64_t used = 0;
++    };
++    static std::map<StorageKey, HeldImage> held;
++    static uint64_t last_frame = UINT64_MAX;
++    uint64_t frame = g_frame.load();
++    if (frame != last_frame) {
++        for (auto it = held.begin(); it != held.end();) {
++            if (frame > it->second.used && frame - it->second.used > 2) {
++                retire_image(std::move(it->second.image));
++                it = held.erase(it);
++            } else {
++                ++it;
++            }
++        }
++        last_frame = frame;
++    }
++    StorageKey key{t->memory, t->format, t->width, t->height, t->depth, t->levels, t->target, t->samples,
++                   t->format == 1 ? t->pool_swizzle.load() : 0};
++    if (auto it = held.find(key); it != held.end()) {
++        it->second.used = frame;
++        return it->second.image.get();
++    }
++    GpuImage* image = image_of_impl(guest);
++    if (image && t->image) held.emplace(key, HeldImage{std::move(t->image), frame});
++    return image;
++}
++
+ void transition(VkCommandBuffer cb, GpuImage& img, VkImageLayout to) {
+     if (img.layout == to) return;
+     // A LOUD guard, not a silent one: a pipeline barrier with an image barrier is illegal inside a dynamic-rendering
+diff --git a/runtime/src/nvn/nvn_objects.cpp b/runtime/src/nvn/nvn_objects.cpp
+index dc28858..9a08fc6 100644
+--- a/runtime/src/nvn/nvn_objects.cpp
++++ b/runtime/src/nvn/nvn_objects.cpp
+@@ -286,10 +286,11 @@ std::unique_lock<std::recursive_mutex> reinit_guard() {
+ 
+ // The NVNtexture descriptor this port writes (the real driver's layout never runs here: the port HLEs
+ // nvnTextureInitialize). Only the game's memcpy of the struct touches it, so the layout is the port's own: a magic and
+-// the texture's own address. A copy then resolves to the texture it was taken from (image_of, nvn_image.cpp), which is
+-// what the real driver would read the descriptor for.
++// the texture's own address plus its storage fields. Copies retain those fields even after the named object is
++// reinitialized; recording and pool registration must not replace them with the named object's current fields.
+ //   0x00 magic, 0x08 the texture's address, 0x10 memory, 0x18 gpu, 0x20 format, 0x24 target, 0x28 width, 0x2c height,
+-//   0x30 depth, 0x34 levels, 0x38 samples, 0x3c flags, 0x40 swizzle (4 bytes), 0x44 pool swizzle, 0x48 stride.
++//   0x30 depth, 0x34 levels, 0x38 samples, 0x3c flags, 0x40 swizzle (4 bytes), 0x44 pool swizzle, 0x48 stride,
++//   0x4c block height (GOBs).
+ // (The rest of the 0xc0 bytes stay as the game left them.)
+ constexpr uint64_t kTextureDescriptorMagic = 0x4E5654584C414544ull;  // "DEALXTVN", arbitrary but unlikely in a struct
+ void write_texture_descriptor(uint64_t guest, const Texture& t) {
+@@ -309,6 +310,7 @@ void write_texture_descriptor(uint64_t guest, const Texture& t) {
+                                     uint32_t(t.swizzle[3]) << 24);
+     st<uint32_t>(guest + 0x44, t.pool_swizzle.load());
+     st<uint32_t>(guest + 0x48, t.stride);
++    st<uint32_t>(guest + 0x4c, t.block_height_gobs);
+ }
+ 
+ void TextureInitialize(CPU& c) {  // NVNboolean (NVNtexture*, const NVNtextureBuilder*)
+@@ -534,18 +536,34 @@ std::deque<std::pair<uint64_t, uint64_t>> g_snapshot_images;         // (snapsho
+ 
+ void drop_snapshot(uint64_t key);  // below
+ 
+-uint64_t make_snapshot(uint64_t guest) {  // under objects_lock
++std::unique_ptr<Texture> texture_from_fields(const DescriptorFields& f) {
++    auto t = std::make_unique<Texture>();
++    t->descriptor_copy = true;
++    t->memory = f.memory, t->gpu = f.gpu, t->format = f.format, t->target = f.target;
++    t->width = f.width, t->height = f.height, t->depth = f.depth;
++    t->levels = f.levels, t->samples = f.samples, t->flags = f.flags;
++    t->stride = f.stride, t->block_height_gobs = f.block_height_gobs;
++    t->pool_swizzle = f.pool_swizzle;
++    for (unsigned k = 0; k < 4; k++) t->swizzle[k] = uint8_t((f.swizzle >> (8 * k)) & 255);
++    return t;
++}
++
++uint64_t make_snapshot(uint64_t guest, uint64_t descriptor) {  // under objects_lock
+     auto o = objects().find(guest);
+     auto* t = o == objects().end() ? nullptr : dynamic_cast<Texture*>(o->second.get());
+-    if (!t) return 0;
+-    auto copy = std::make_unique<Texture>();
+-    copy->target = t->target, copy->format = t->format, copy->flags = t->flags, copy->levels = t->levels;
+-    copy->samples = t->samples, copy->depth_stencil_mode = t->depth_stencil_mode;
+-    copy->width = t->width, copy->height = t->height, copy->depth = t->depth, copy->stride = t->stride;
+-    copy->pool = t->pool, copy->offset = t->offset, copy->storage_size = t->storage_size;
+-    copy->memory = t->memory, copy->gpu = t->gpu, copy->block_height_gobs = t->block_height_gobs;
+-    std::memcpy(copy->swizzle, t->swizzle, sizeof copy->swizzle);
+-    copy->pool_swizzle = t->pool_swizzle.load();
++    DescriptorFields fields;
++    bool copied = texture_descriptor_fields(descriptor, fields);
++    if (!t && !copied) return 0;
++    auto copy = copied ? texture_from_fields(fields) : std::make_unique<Texture>();
++    if (!copied) {
++        copy->target = t->target, copy->format = t->format, copy->flags = t->flags, copy->levels = t->levels;
++        copy->samples = t->samples, copy->depth_stencil_mode = t->depth_stencil_mode;
++        copy->width = t->width, copy->height = t->height, copy->depth = t->depth, copy->stride = t->stride;
++        copy->pool = t->pool, copy->offset = t->offset, copy->storage_size = t->storage_size;
++        copy->memory = t->memory, copy->gpu = t->gpu, copy->block_height_gobs = t->block_height_gobs;
++        std::memcpy(copy->swizzle, t->swizzle, sizeof copy->swizzle);
++        copy->pool_swizzle = t->pool_swizzle.load();
++    }
+     uint64_t key = kSnapshot | ++g_next_snapshot;
+     objects()[key] = std::move(copy);
+     auto& keys = g_snapshots_of[guest];
+@@ -583,7 +601,7 @@ void hand_image_to_snapshots(uint64_t guest) {  // under objects_lock: the textu
+         auto so = objects().find(key);
+         auto* snap = so == objects().end() ? nullptr : dynamic_cast<Texture*>(so->second.get());
+         // Cubes and cube arrays only (the light probes): inheriting every image kept ~450 per second alive.
+-        if (!snap || !t || !t->image || snap->image || (t->target != 8 && t->target != 9)) continue;
++        if (!snap || snap->descriptor_copy || !t || !t->image || snap->image || (t->target != 8 && t->target != 9)) continue;
+         snap->image = t->image;
+         g_snapshot_images.push_back({key, now});
+     }
+@@ -726,9 +744,10 @@ void TexturePoolRegister(CPU& c) {
+     // The view may pick levels or layers (a bloom chain samples one mip of its target) and override the swizzle
+     // (a font atlas in R8 is registered with alpha = R).
+     ViewInfo v = read_view(c, c.x[3]);
+-    // A slot may name a copied descriptor (the draw context's targets are copies): store the texture it names, so
+-    // that the slot, its snapshot and g_registered all point at a live texture. get<> takes the lock shared, so this
+-    // has to happen before objects_lock below.
++    const uint64_t descriptor = c.x[2];
++    // Keep the named object for slot bookkeeping, but snapshot the original descriptor:
++    // the named object may already describe another ping-pong surface. get<> takes the
++    // lock shared, so resolve its name before objects_lock below.
+     if (c.x[2] && !get<Texture>(c.x[2]))
+         if (uint64_t named = texture_descriptor_ref(c.x[2])) c.x[2] = named;
+     if (trace_textures()) {
+@@ -751,7 +770,7 @@ void TexturePoolRegister(CPU& c) {
+         uint64_t old = before.texture;
+         d->textures[id] = c.x[2];
+         if (auto s = d->snapshots.find(uint32_t(c.x[1])); s != d->snapshots.end()) drop_snapshot(s->second);
+-        if (uint64_t snap = make_snapshot(c.x[2])) d->snapshots[uint32_t(c.x[1])] = snap;
++        if (uint64_t snap = make_snapshot(c.x[2], descriptor)) d->snapshots[uint32_t(c.x[1])] = snap;
+         auto& slots = g_registered[c.x[2]];  // re-registered every frame: keep each slot once
+         std::pair<uint64_t, uint32_t> slot{c.x[0], uint32_t(c.x[1])};
+         if (std::find(slots.begin(), slots.end(), slot) == slots.end()) slots.push_back(slot);
+@@ -823,9 +842,57 @@ bool texture_descriptor_fields(uint64_t guest, DescriptorFields& out) {
+     out.levels = ld<uint32_t>(guest + 0x34);
+     out.samples = ld<uint32_t>(guest + 0x38);
+     out.swizzle = ld<uint32_t>(guest + 0x40);
++    out.gpu = ld<uint64_t>(guest + 0x18);
++    out.flags = ld<uint32_t>(guest + 0x3c);
++    out.pool_swizzle = ld<uint32_t>(guest + 0x44);
++    out.stride = ld<uint32_t>(guest + 0x48);
++    out.block_height_gobs = ld<uint32_t>(guest + 0x4c);
+     return true;
+ }
+ 
++namespace {
++struct RecordedTextureRetirements {
++    std::mutex mutex;
++    std::vector<uint64_t> keys;
++};
++RecordedTextureRetirements& recorded_texture_retirements() {
++    // Lists can be released during static teardown, after the object registry has gone.
++    static auto* retired = new RecordedTextureRetirements;
++    return *retired;
++}
++}  // namespace
++
++RecordedTexture::~RecordedTexture() {
++    if (!key) return;
++    auto& retired = recorded_texture_retirements();
++    std::lock_guard lk(retired.mutex);
++    retired.keys.push_back(key);
++}
++
++void drain_recorded_textures() {
++    auto& retired = recorded_texture_retirements();
++    std::vector<uint64_t> keys;
++    {
++        std::lock_guard lk(retired.mutex);
++        keys.swap(retired.keys);
++    }
++    for (uint64_t key : keys) drop_snapshot(key);
++}
++
++std::shared_ptr<RecordedTexture> record_texture_descriptor(uint64_t guest) {
++    DescriptorFields f;
++    if (!texture_descriptor_fields(guest, f)) return {};
++    auto t = texture_from_fields(f);
++    auto owner = std::make_shared<RecordedTexture>();
++    std::lock_guard lk(objects_lock());
++    // Distinct from pool snapshots: an exact recorded descriptor must not take their
++    // same-memory/different-shape fallback when resolving an image.
++    static uint64_t next = 0;
++    owner->key = 0xD000000000000000ull | ++next;
++    objects()[owner->key] = std::move(t);
++    return owner;
++}
++
+ NX_HLE("nvnMemoryPoolInitialize", MemoryPoolInitialize);
+ NX_HLE("nvnMemoryPoolFinalize", MemoryPoolFinalize);
+ NX_HLE("nvnMemoryPoolMap", MemoryPoolMap);
+diff --git a/runtime/src/nvn/nvn_pipeline.cpp b/runtime/src/nvn/nvn_pipeline.cpp
+index c351d30..6839ff6 100644
+--- a/runtime/src/nvn/nvn_pipeline.cpp
++++ b/runtime/src/nvn/nvn_pipeline.cpp
+@@ -285,15 +285,16 @@ std::deque<std::pair<uint64_t, VkPipeline>> g_pipe_dead;
+ CullDecision cull_decision(const PipelineKey& key) {
+     static const bool no_cull = std::getenv("NX_NO_CULL") != nullptr;
+     static const bool flip_winding = std::getenv("NX_FLIP_WINDING") != nullptr;
+-    static const bool flip_depth = std::getenv("NX_NO_FLIP_WINDING_DEPTH") == nullptr;
+     static const bool inert_depth_nocull = std::getenv("NX_NO_INERT_DEPTH_NOCULL") == nullptr;
+     CullDecision d;
+     d.depth_attached = key.depth_format != VK_FORMAT_UNDEFINED;
+     d.depth_used = key.depth.depth_test || key.depth.depth_write || key.depth.stencil_test;
+     d.cull_2d = !d.depth_attached || (inert_depth_nocull && !d.depth_used);
+     d.cull_mode = (no_cull || d.cull_2d) ? VK_CULL_MODE_NONE : vk_cull(key.polygon.cull);
++    // A depth attachment does not change the guest's winding. Flipping only depth-backed
++    // draws rejects PlayerMake's mask producer and renders the back sides of its models.
+     bool front_ccw = key.polygon.front != 0;
+-    if (flip_winding || (flip_depth && d.depth_attached)) front_ccw = !front_ccw;
++    if (flip_winding) front_ccw = !front_ccw;
+     d.front_face = front_ccw ? VK_FRONT_FACE_COUNTER_CLOCKWISE : VK_FRONT_FACE_CLOCKWISE;
+     return d;
+ }
+@@ -752,42 +753,9 @@ VkPipeline graphics_pipeline(const PipelineKey& key, const ProgramLayout& layout
+     const CullDecision d = cull_decision(key);
+     VkPipelineRasterizationStateCreateInfo rs{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
+     rs.polygonMode = key.polygon.mode == 0 ? VK_POLYGON_MODE_POINT : key.polygon.mode == 1 ? VK_POLYGON_MODE_LINE : VK_POLYGON_MODE_FILL;
+-    // NX_NO_CULL=1 / NX_FLIP_WINDING=1 (experiment, PATCH-CULL-OVERRIDE): the plaza's 3D draws rasterize no fragment at
+-    // all while its UI does, and every other cause is ruled out (blending off, no depth attachment, no alpha test, no
+-    // logic op, geometry and uniforms sane). A whole-primitive rejection is what is left: Vulkan decides the front face
+-    // from the signed area in framebuffer coordinates, which the negative-height viewport (nvn_draw.cpp) mirrors, so
+-    // NVN's CW/CCW may not carry over. NX_FLIP_WINDING=1 inverts the winding; NX_NO_CULL=1 drops culling altogether,
+-    // which tells a winding error from clipping. Unset, both are inert.
+-    // (The cull rule and its env switches live in cull_decision, above: PATCH-CULL-TRACE.)
+-    // PATCH-WINDING-DEPTH: the two kinds of draw this game makes need opposite front-face rules. The viewport is
+-    // mirrored to emulate NVN's upper-left origin (nvn_draw.cpp: vp.y += vp.height, vp.height = -vp.height), which
+-    // is a handedness change, so a draw whose vertices come out of a Y-up world matrix has the opposite
+-    // screen-space winding in Vulkan than the game meant and is culled as a back face: measured, every 3D world
+-    // draw (cull BACK, thousands of vertices, a depth attachment) produced zero fragments, while NX_NO_CULL=1
+-    // rendered the whole plaza correctly. The 2D path authors its own Y negation instead - the composite quad's
+-    // vertex transform has a negative Y row (0 -1.31879 0 -787.976) - so the mirror on top of that already gives
+-    // the right winding and a blind flip over-corrects it: NX_FLIP_WINDING=1 filled every 3D target but left the
+-    // presented texture black from the title screen on. So the flip goes to the pipelines that carry a depth
+-    // attachment (the 3D passes) and not to the 2D ones. NX_NO_FLIP_WINDING_DEPTH=1 bisects back to the old
+-    // unflipped rule; NX_FLIP_WINDING=1 still forces the flip everywhere (the old behaviour).
+-    // (The cull rule and its env switches live in cull_decision, above: PATCH-CULL-TRACE.)
+-    // The 2D path cannot be served by a winding rule at all. Its full-screen composite quad is the only thing
+-    // standing between a fully drawn 3D target and the present texture, and measured (run fw2) it produces zero
+-    // fragments whichever way the front face points, because the game's 2D quads wind both ways in the same draw
+-    // batch (flip/cull free GUI triangles next to the blit). A quad that is never meant to be culled therefore gets
+-    // no culling; NX_NO_CULL still forces the same for everything.
+-    // PATCH-INERT-DEPTH-NOCULL: a depth attachment that the draw neither tests, writes nor stencils against is
+-    // not a 3D pass at all - it is a 2D composite that happens to carry the depth image along. The rule above
+-    // keyed only on whether a depth image was ATTACHED, so the 2D composites that run inside a pass with depth
+-    // (the news studio's whole display chain: 6a00ffe910 -> 6a00ffea80 -> 6a00ffe9c0 -> screen) were treated as
+-    // 3D, got the front-face flip meant for Y-up world matrices, and were then CULLED AWAY: 6a00ffea80 and
+-    // 6a00ffe9c0 dumped EXACTLY 0.00/0.00/0.00 every frame while the target they sampled (6a00ffe910) was bright.
+-    // Measured (run nocull1, NX_NO_CULL=1): the studio viewport went from 95.6% dark to 7.5% dark and the two
+-    // intermediates from 100% dark to 2.0%/2.4% - i.e. the fragments were being culled, not written black.
+-    // Their state, from the draw trace, is exactly the inert-depth case: depth test 0, depth write 0,
+-    // stencil test 0, while the 3D world draws carry depth test 1. So the discriminator is whether the depth
+-    // state is USED, not whether an image is attached.
+-    // NX_NO_INERT_DEPTH_NOCULL=1: the old attachment-only rule (bisecting).
++    // The shared cull rule retains the existing 2D/inert-depth exception. Neither an
++    // attachment nor an enabled depth test is a reason to invert frontFace; use the
++    // guest polygon state, with NX_FLIP_WINDING only as an explicit diagnostic override.
+     rs.cullMode = d.cull_mode;
+     rs.frontFace = d.front_face;
+     rs.lineWidth = 1.0f;
+diff --git a/runtime/src/nvn/nvn_sets.cpp b/runtime/src/nvn/nvn_sets.cpp
+index f801c7c..33d361d 100644
+--- a/runtime/src/nvn/nvn_sets.cpp
++++ b/runtime/src/nvn/nvn_sets.cpp
+@@ -124,7 +124,7 @@ void lookup_handle(uint64_t handle, uint64_t& texture, SamplerInfo& sampler, Vie
+             // The rendered-only guard fixed 09000 but not 08000; the unconditional keep-live guard fixed the plaza
+             // but blacked the news screen (2026-11-09). This content guard is the middle ground.
+             static const bool sub_stale = std::getenv("NX_SNAPSHOT_SUB_STALE") != nullptr;
+-            if (differs && !sub_stale && now && then && now->image &&
++            if (differs && !sub_stale && now && then && !then->descriptor_copy && now->image &&
+                 (now->image->rendered || now->image->texels ||
+                  (now->image->uploaded && now->image->content))) {
+                 static const int keep_cap = std::getenv("NX_KEEP_LOG_ALL") ? 100000 : 40;
+@@ -136,7 +136,7 @@ void lookup_handle(uint64_t handle, uint64_t& texture, SamplerInfo& sampler, Vie
+                         then->width, then->height);
+                 differs = false;
+             }
+-            if (then && (!now || differs)) texture = e.snapshot;
++            if (then && (then->descriptor_copy || !now || differs)) texture = e.snapshot;
+         }
+         if (view && e.has_view) *view = e.view;
+     }
+diff --git a/runtime/src/nvn/nvn_trace.cpp b/runtime/src/nvn/nvn_trace.cpp
+index 7f0cab0..8b73ea2 100644
+--- a/runtime/src/nvn/nvn_trace.cpp
++++ b/runtime/src/nvn/nvn_trace.cpp
+@@ -201,6 +201,7 @@ void drain_objects() {
+     {
+         std::lock_guard lk(objects_lock());
+         uint64_t upto = replay_floor();
++        drain_recorded_textures();
+         auto& all = deferred_objects();
+         size_t keep = 0;
+         for (auto& [epoch, o] : all) {
+diff --git a/runtime/src/nvn/nvn_vk.h b/runtime/src/nvn/nvn_vk.h
+index bb9c5a1..fd7b940 100644
+--- a/runtime/src/nvn/nvn_vk.h
++++ b/runtime/src/nvn/nvn_vk.h
+@@ -176,6 +176,7 @@ void frame_log(uint64_t frames);  // the mode's counters, with the timing log
+ void free_retired_images(uint64_t completed);
+ // A GPU-written image of a destroyed texture with the same memory and shape (nvn_frames.cpp), or null.
+ std::shared_ptr<GpuImage> reuse_image(const Texture& t);  // images of textures destroyed before submit `completed` + 1
++void retire_image(std::shared_ptr<GpuImage> image);  // after all submits that may reference it, including this one
+ 
+ // nvn_debug.cpp: NX_DUMP_FRAMES, the presented texture read back (recorded into the present's command buffer, written
+ // after its fence).
