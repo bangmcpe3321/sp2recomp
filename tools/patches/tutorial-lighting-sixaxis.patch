@@ -1,0 +1,743 @@
+diff --git a/runtime/src/hle_hid.cpp b/runtime/src/hle_hid.cpp
+--- a/runtime/src/hle_hid.cpp
++++ b/runtime/src/hle_hid.cpp
+@@ -301,7 +301,7 @@
+ NX_HLE("_ZN2nn3hid20IsVibrationPermittedEv", one);
+ NX_HLE("_ZN2nn3hid18SendVibrationValueERKNS0_21VibrationDeviceHandleERKNS0_14VibrationValueE", noop);
+ // PATCH-SIXAXIS: hand the game a live motion sensor.  A SixAxisSensorHandle is {u32 npad_id,
+-// u32 sensor_index}; a SixAxisSensorState is 0x60 bytes: u64 sampling, u64 delta ns, accel xyz, gyro
++// u32 sensor_index}; a SixAxisSensorState is 0x60 bytes: u64 delta ns, u64 sampling, accel xyz, gyro
+ // xyz, angle xyz, a 3x3 direction matrix, u32 attributes, u32 reserved.  Held level: identity
+ // direction, gravity along -Z, no rotation.  NX_SIXAXIS=0 keeps the old empty behaviour.
+ namespace {
+@@ -311,7 +311,7 @@
+     return on;
+ }
+ 
+-uint64_t g_sixaxis_sampling = 0;
++uint64_t g_sixaxis_sampling[2] = {};
+ 
+ bool sixaxis_wobble() {
+     static const bool on = std::getenv("NX_SIXAXIS_WOBBLE") != nullptr;
+@@ -340,10 +340,10 @@
+ static const int kGridDwell = 140;  // frames held at a pose (the aim timer needs 120)
+ static const int kGridRamp = 30;    // frames spent moving to the next pose
+ 
+-void fill_sixaxis_state(uint64_t addr) {
++void fill_sixaxis_state(uint64_t addr, uint32_t sensor) {
+     std::memset(reinterpret_cast<void*>(addr), 0, 0x60);
+-    st<uint64_t>(addr + 0x00, ++g_sixaxis_sampling);
+-    st<uint64_t>(addr + 0x08, 16666667ull);  // one frame at 60 Hz, in ns
++    st<uint64_t>(addr + 0x00, 16666667ull);  // one frame at 60 Hz, in ns
++    st<uint64_t>(addr + 0x08, ++g_sixaxis_sampling[sensor]);
+     float ax = 0.0f, ay = 0.0f, az = -1.0f, gx = 0.0f, gy = 0.0f, gz = 0.0f;
+     float angx = 0.0f, angy = 0.0f, angz = 0.0f;
+     float m[9] = {1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f};
+@@ -455,7 +455,7 @@
+     st<float>(addr + 0x2c, angy);
+     st<float>(addr + 0x30, angz);
+     for (int i = 0; i < 9; i++) st<float>(addr + 0x34 + 4 * i, m[i]);
+-    st<uint32_t>(addr + 0x58, 3);  // SixAxisSensorAttribute: IsConnected | IsNewData
++    st<uint32_t>(addr + 0x58, 1);  // SixAxisSensorAttribute: IsConnected
+ }
+ 
+ void GetSixAxisSensorHandles(CPU& c) {  // (SixAxisSensorHandle*, int, const u32& npad_id, style)
+@@ -489,17 +489,30 @@
+ void GetSixAxisSensorStates(CPU& c) {  // (SixAxisSensorState*, int, const SixAxisSensorHandle&)
+     const uint64_t out = c.x[0];
+     const int count = int(uint32_t(c.x[1]));
++    c.x[0] = 0;
++    if (count <= 0) return;
++    const int capacity = std::min(count, 16);
++    std::memset(reinterpret_cast<void*>(out), 0, size_t(capacity) * 0x60);
++    if (!sixaxis_on()) return;
++    const uint32_t id = ld<uint32_t>(c.x[2]), sensor = ld<uint32_t>(c.x[2] + 4);
++    if (id != 0 || sensor >= 2) return;  // only player 1's sensors are connected
++    static std::mutex m;
++    static std::deque<std::array<uint8_t, 0x60>> history[2];
++    std::lock_guard lk(m);
+     static uint64_t reads = 0;
+     reads++;
+-    if (sixaxis_on()) {
+-        if (reads <= 3 || reads % 600 == 0)
+-            log("hid: six-axis states read %llu id %u sensor %u count %d", (unsigned long long)reads, ld<uint32_t>(c.x[2]),
+-                ld<uint32_t>(c.x[2] + 4), count);
+-        for (int i = 0; i < count && i < 64; i++) fill_sixaxis_state(out + 0x60 * i);
+-    } else {
+-        std::memset(reinterpret_cast<void*>(out), 0, size_t(count < 64 ? count : 64) * 0x60);
+-    }
+-    c.x[0] = 0;
++    if (reads <= 3 || reads % 600 == 0)
++        log("hid: six-axis states read %llu id %u sensor %u count %d", (unsigned long long)reads, id, sensor, count);
++    fill_sixaxis_state(out, sensor);
++    std::array<uint8_t, 0x60> now;
++    std::memcpy(now.data(), reinterpret_cast<const void*>(out), now.size());
++    auto& samples = history[sensor];
++    samples.push_front(now);
++    if (samples.size() > 16) samples.pop_back();
++    const int written = std::min(capacity, int(samples.size()));
++    for (int i = 1; i < written; i++)
++        std::memcpy(reinterpret_cast<void*>(out + 0x60ull * i), samples[i].data(), 0x60);
++    c.x[0] = uint64_t(written);
+ }
+ 
+ }  // namespace
+diff --git a/runtime/src/nvn/nvn_draw.cpp b/runtime/src/nvn/nvn_draw.cpp
+--- a/runtime/src/nvn/nvn_draw.cpp
++++ b/runtime/src/nvn/nvn_draw.cpp
+@@ -6,6 +6,7 @@
+ // on by default; NX_KEEP_COLOUR_AREA=0 restores the old clipped fold for bisecting).
+ #include <algorithm>
+ #include <array>
++#include <cmath>
+ #include <cstdarg>
+ #include <cstdio>
+ #include <cstdlib>
+@@ -132,6 +133,22 @@
+     now = u, g_bound.vertex_set |= 1u << binding, g_state_set++;
+ }
+ 
++uint32_t instance_chunk_size(const ShaderInfo& vs, uint32_t instances, uint32_t limit) {
++    // Splitting changes Vulkan BaseInstance. A shader that subtracts it from InstanceIndex
++    // would restart its instance IDs at zero in every chunk instead of continuing the guest draw.
++    constexpr uint32_t base_instance = 4425;  // SPIR-V BuiltIn BaseInstance
++    if (limit && instances > limit &&
++        std::find(vs.refl.builtins_in.begin(), vs.refl.builtins_in.end(), base_instance) ==
++            vs.refl.builtins_in.end()) return limit;
++    return instances;
++}
++
++void align_unit_point_viewport(VkViewport& vp) {
++    const float x = vp.x + vp.width * 0.5f, y = vp.y + vp.height * 0.5f;
++    vp.x += std::floor(x) + 0.5f - x;
++    vp.y += std::floor(y) + 0.5f - y;
++}
++
+ // Viewport, scissor, blend constants and the rasterizer's dynamic state (every pipeline declares them dynamic).
+ void set_dynamic(VkCommandBuffer cb, const VkViewport& vp, const VkRect2D& sc) {
+     Bound& b = g_bound;
+@@ -170,7 +187,10 @@
+     for (uint32_t k = 0; k < t.color_count; k++) {
+         colors[k].sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+         GpuImage* img = t.colors[k] ? image_of(t.colors[k]) : nullptr;
+-        if (img && compressed_image(*img)) img = nullptr;  // a compressed image is no attachment (see nvn_image.cpp)
++        static const bool own_format = std::getenv("NX_RT_IMAGE_FORMAT") != nullptr;
++        const VkFormat color_format = !img ? VK_FORMAT_UNDEFINED
++                                      : own_format ? img->format : attachment_format(*img, t.views.format[k]);
++        if (img && compressed_format(color_format)) img = nullptr;  // only an uncompressed block view is renderable
+         // PATCH-COLOUR-SLOT-ASPECT (validation VUID-VkRenderingInfo-colorAttachmentCount-06087): a COLOUR slot that
+         // resolves to a DEPTH image is not a colour attachment. The depth branch below has always checked
+         // (`dimg->aspect != VK_IMAGE_ASPECT_COLOR_BIT`, :204) but this loop never did, so a colour slot naming an
+@@ -207,8 +227,7 @@
+         transition(cb, *img, VK_IMAGE_LAYOUT_GENERAL);  // rendered images stay GENERAL (sampled while rendered)
+         img->rendered = true;
+         uint32_t level = std::min<uint32_t>(t.views.level[k], img->levels - 1);
+-        static const bool own_format = std::getenv("NX_RT_IMAGE_FORMAT") != nullptr;
+-        formats[k] = own_format ? img->format : view_format(*img, t.views.format[k]);
++        formats[k] = color_format;
+         g_pass_color_formats[k] = formats[k];
+         colors[k].imageView = attachment_view(*img, level, t.views.layer[k], formats[k]);
+         g_pass_view_null[k] = colors[k].imageView ? 0 : 1;
+@@ -225,8 +244,8 @@
+         colors[k].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+         colors[k].loadOp = fresh >> k & 1 ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
+         colors[k].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+-        extent = {std::min(extent.width, std::max(1u, img->width >> level)),
+-                  std::min(extent.height, std::max(1u, img->height >> level))};
++        const VkExtent2D view_extent = attachment_extent(*img, level, formats[k]);
++        extent = {std::min(extent.width, view_extent.width), std::min(extent.height, view_extent.height)};
+     }
+     GpuImage* dimg = t.depth ? image_of(t.depth) : nullptr;
+     if (dimg && compressed_image(*dimg)) dimg = nullptr;
+@@ -824,6 +843,10 @@
+     // upside down, which the post chain undid in some scenes and not in others: the first course showed a
+     // mirrored sky.)
+     vp.y += vp.height, vp.height = -vp.height;
++    // NVN's unit reduction point at NDC (0,0) belongs to floor(window center). Put it at that
++    // pixel's center so Vulkan's edge tie cannot select the preceding pixel. Only apply this
++    // after proving constant Position and PointSize: moving arbitrary/fractional points is not safe.
++    if (mode == VK_PRIMITIVE_TOPOLOGY_POINT_LIST && constant_unit_point(vs)) align_unit_point_viewport(vp);
+     VkRect2D sc{{0, 0}, g_pass_extent};
+     if (g_state.has_scissor)
+         sc = {{std::max(0, g_state.scissor[0]), std::max(0, g_state.scissor[1])},
+@@ -831,15 +854,15 @@
+     set_dynamic(cb, vp, sc);
+ 
+     trace_skin(indexed, c, vs, fs);
+-    // The software driver the headless runs use dies in its instance path on very large instance counts (the draws
+-    // "huge draw" names above): they are split, which is exact because firstInstance carries gl_InstanceIndex and
+-    // the instance-divisor fetch. NX_INSTANCE_CHUNK=0 turns the split off.
++    // Limit large instance batches for software drivers only where splitting preserves shader semantics.
++    // firstInstance advances InstanceIndex and instance-rate fetches, but also changes BaseInstance.
++    // NX_INSTANCE_CHUNK=0 turns splitting off for every shader.
+     static const uint32_t instance_chunk = [] {
+         const char* e = std::getenv("NX_INSTANCE_CHUNK");
+         return e ? uint32_t(std::strtoul(e, nullptr, 10)) : 4096u;
+     }();
+     uint32_t instances = uint32_t(std::max(1, c.i[3]));
+-    uint32_t chunk = instance_chunk && instances > instance_chunk ? instance_chunk : instances;
++    uint32_t chunk = instance_chunk_size(*vs, instances, instance_chunk);
+     if (indexed) {
+         uint32_t count = uint32_t(c.i[0]);
+         if (g_bound.has_index && g_bound.index.buffer == in.index.buffer && g_bound.index.offset == in.index.offset &&
+@@ -1057,6 +1080,10 @@
+     for (uint32_t k = 0; k < 9; k++)  // this pass's targets only (the other slots may name freed images)
+         if ((k < g_pass.color_count || (k == 8 && g_pass.depth)) && g_pass_images[k])
+             g_pass_images[k]->rendered_at = g_pass_serial;
++    for (uint32_t k = 0; k < g_pass.color_count; k++)
++        if ((g_pass_written & (1u << k)) && g_pass_images[k])
++            if (const auto* t = get<Texture>(g_pass.colors[k]))
++                readback_linear_texture(cb, *t, *g_pass_images[k], separate_write_backs());
+     gpu_profile_mark(cb, "outside passes (clears, uploads, copies)");
+ }
+ void draw_end_rendering(VkCommandBuffer cb, int reason) {  // and the pending clears (nvn_clears.cpp)
+diff --git a/runtime/src/nvn/nvn_image.cpp b/runtime/src/nvn/nvn_image.cpp
+--- a/runtime/src/nvn/nvn_image.cpp
++++ b/runtime/src/nvn/nvn_image.cpp
+@@ -454,7 +454,21 @@
+         if (img->storage) ci.usage |= VK_IMAGE_USAGE_STORAGE_BIT;
+     }
+     ci.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
++    // The GPU BC encoder writes one integer texel per compressed block. Keep that attachment and the sampled
++    // compressed texture in the same image; uploading the CPU pool instead would replace its GPU-written blocks.
++    if (compressed_format(img->format) && ci.imageType == VK_IMAGE_TYPE_2D) {
++        VkImageCreateInfo blocks = ci;
++        blocks.flags |= VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT | VK_IMAGE_CREATE_BLOCK_TEXEL_VIEW_COMPATIBLE_BIT |
++                        VK_IMAGE_CREATE_EXTENDED_USAGE_BIT;
++        blocks.usage |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
++        VkImageFormatProperties properties{};
++        if (p_vkGetPhysicalDeviceImageFormatProperties(vk_physical(), blocks.format, blocks.imageType, blocks.tiling,
++                                                       blocks.usage, blocks.flags, &properties) == VK_SUCCESS)
++            ci = blocks;
++    }
+     if (!image_supported(ci, t->format)) return nullptr;
++    img->block_renderable = (ci.flags & VK_IMAGE_CREATE_BLOCK_TEXEL_VIEW_COMPATIBLE_BIT) &&
++                            (ci.usage & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT);
+     if (!check(p_vkCreateImage(vk_device(), &ci, nullptr, &img->image), "vkCreateImage")) return nullptr;
+     VkMemoryRequirements req{};
+     p_vkGetImageMemoryRequirements(vk_device(), img->image, &req);
+@@ -494,6 +508,9 @@
+     vi.image = img->image;
+     vi.viewType = img->view_type;
+     vi.format = img->format;
++    VkImageViewUsageCreateInfo sampled_usage{VK_STRUCTURE_TYPE_IMAGE_VIEW_USAGE_CREATE_INFO};
++    sampled_usage.usage = VK_IMAGE_USAGE_SAMPLED_BIT;
++    if (img->block_renderable) vi.pNext = &sampled_usage;
+     // A sampled depth/stencil view reads depth.
+     vi.subresourceRange = {aspect == 3 ? VkImageAspectFlags(VK_IMAGE_ASPECT_DEPTH_BIT) : img->aspect, 0, img->levels, 0,
+                            img->layers};
+@@ -523,13 +540,20 @@
+     return img.get();
+ }
+ 
++static bool cached_image_expired(const GpuImage& image, uint64_t used, uint64_t frame, uint64_t latest_write) {
++    if (frame <= used || frame - used <= 2) return false;
++    // GPU-only contents remain authoritative while idle. An unknown write order is
++    // not evidence of replacement; only a later render to this storage supersedes it.
++    return !image.rendered || (image.rendered_at && image.rendered_at < latest_write);
++}
++
+ GpuImage* image_of(uint64_t guest) {
+     Texture* t = get<Texture>(guest);
+     if (!t || !t->descriptor_copy) return image_of_impl(guest);
+ 
+-    // Retained command lists own metadata, not a GPU allocation for every historical
+-    // resolution. Keep exact storage alive across the current frame's submits; old
+-    // images retire through the existing fence-aware graveyard.
++    // Registrations and retained command lists own immutable metadata, not a native
++    // allocation for every historical resolution. Keep current GPU contents across
++    // idle frames; reloadable or superseded images retire through the fence-aware graveyard.
+     struct HeldImage {
+         std::shared_ptr<GpuImage> image;
+         uint64_t used = 0;
+@@ -538,8 +562,11 @@
+     static uint64_t last_frame = UINT64_MAX;
+     uint64_t frame = g_frame.load();
+     if (frame != last_frame) {
++        std::map<uint64_t, uint64_t> latest_write;
++        for (const auto& entry : held)
++            latest_write[entry.first.memory] = std::max(latest_write[entry.first.memory], entry.second.image->rendered_at);
+         for (auto it = held.begin(); it != held.end();) {
+-            if (frame > it->second.used && frame - it->second.used > 2) {
++            if (cached_image_expired(*it->second.image, it->second.used, frame, latest_write[it->first.memory])) {
+                 retire_image(std::move(it->second.image));
+                 it = held.erase(it);
+             } else {
+diff --git a/runtime/src/nvn/nvn_objects.cpp b/runtime/src/nvn/nvn_objects.cpp
+--- a/runtime/src/nvn/nvn_objects.cpp
++++ b/runtime/src/nvn/nvn_objects.cpp
+@@ -564,6 +564,9 @@
+         std::memcpy(copy->swizzle, t->swizzle, sizeof copy->swizzle);
+         copy->pool_swizzle = t->pool_swizzle.load();
+     }
++    // Registration freezes storage metadata even when passed the original NVN object.
++    // Reinitializing that object must not retarget an already registered descriptor.
++    copy->descriptor_copy = true;
+     uint64_t key = kSnapshot | ++g_next_snapshot;
+     objects()[key] = std::move(copy);
+     auto& keys = g_snapshots_of[guest];
+diff --git a/runtime/src/nvn/nvn_pipeline.cpp b/runtime/src/nvn/nvn_pipeline.cpp
+--- a/runtime/src/nvn/nvn_pipeline.cpp
++++ b/runtime/src/nvn/nvn_pipeline.cpp
+@@ -52,6 +52,31 @@
+     return ok ? f : img.format;
+ }
+ 
++VkFormat attachment_format(const GpuImage& img, uint32_t nvn) {
++    const VkFormat format = vk_format(nvn);
++    uint32_t block_width = 1, block_height = 1, block_bytes = 0;
++    format_block(img.nvn_format, block_width, block_height, block_bytes);
++    if (img.block_renderable && format != VK_FORMAT_UNDEFINED && !compressed_format(format) &&
++        format_aspect(nvn) == 0 && block_bytes && vk_block_bytes(format) == block_bytes) {
++        VkFormatProperties properties{};
++        p_vkGetPhysicalDeviceFormatProperties(vk_physical(), format, &properties);
++        if (properties.optimalTilingFeatures & VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT) return format;
++    }
++    return view_format(img, nvn);
++}
++
++VkExtent2D attachment_extent(const GpuImage& img, uint32_t level, VkFormat format) {
++    uint32_t width = std::max(1u, img.width >> std::min(level, 31u));
++    uint32_t height = std::max(1u, img.height >> std::min(level, 31u));
++    if (img.block_renderable && !compressed_format(format)) {
++        uint32_t bw = 1, bh = 1, bytes = 0;
++        format_block(img.nvn_format, bw, bh, bytes);
++        width = (width + bw - 1) / bw;
++        height = (height + bh - 1) / bh;
++    }
++    return {width, height};
++}
++
+ VkImageViewType view_type(const ImageShape& s) {  // SPIR-V Dim: 0 1D, 1 2D, 2 3D, 3 Cube
+     switch (s.dim) {
+         case 0: return s.arrayed ? VK_IMAGE_VIEW_TYPE_1D_ARRAY : VK_IMAGE_VIEW_TYPE_1D;
+@@ -71,14 +96,17 @@
+ 
+ // `kinds`: per vertex input location, 0 float or the integer kind of its attribute format (vertex_int_kind).
+ // `unwritten`: fragment input locations the vertex stage does not write (default_unwritten_inputs).
+-VkShaderModule module_of(const ShaderInfo* s, const uint8_t* kinds = nullptr, uint32_t unwritten = 0) {
+-    static std::map<std::tuple<const ShaderInfo*, std::string, uint32_t>, VkShaderModule> cache;
++// `outputs`: integer color-attachment kinds; independent of the vertex-input diagnostic override.
++VkShaderModule module_of(const ShaderInfo* s, const uint8_t* kinds = nullptr, uint32_t unwritten = 0,
++                         const uint8_t* outputs = nullptr) {
++    static std::map<std::tuple<const ShaderInfo*, std::string, uint32_t, std::string>, VkShaderModule> cache;
+     // The integer-vertex-input patch (skinned models' bone indices; without it Metal refuses every character's
+     // pipeline, DEBUG.md #25/#26). NX_INT_ATTRIBS=0 turns it off.
+     static const char* int_env = std::getenv("NX_INT_ATTRIBS");
+     static const bool off = int_env && int_env[0] == '0';
+     std::string k = kinds && !off ? std::string(reinterpret_cast<const char*>(kinds), 16) : std::string(16, '\0');
+-    auto& m = cache[{s, k, unwritten}];
++    std::string o = outputs ? std::string(reinterpret_cast<const char*>(outputs), 16) : std::string(16, '\0');
++    auto& m = cache[{s, k, unwritten, o}];
+     if (!m) {
+         // NX_SHADER_STATS: the per-draw-variant cost (a patched copy of the whole SPIR-V module and its VkShaderModule).
+         const bool stats_on = host_stats_on();
+@@ -86,6 +114,11 @@
+         bool is_patched = false;
+         const uint8_t* int_kinds = k != std::string(16, '\0') ? reinterpret_cast<const uint8_t*>(k.data()) : nullptr;
+         std::vector<uint32_t> code = patched_spirv(s, int_kinds, unwritten, &is_patched);
++        if (o != std::string(16, '\0')) {
++            std::vector<uint32_t> integer_outputs;
++            if (patch_int_outputs(code, reinterpret_cast<const uint8_t*>(o.data()), integer_outputs))
++                code.swap(integer_outputs);
++        }
+         if (s->stage == ShaderStage::Vertex) clip_z_module(s, code);  // NX_CLIP_Z_PATCH (nvn_spirv_clip.cpp)
+         VkShaderModuleCreateInfo ci{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+         ci.codeSize = code.size() * 4;
+@@ -201,7 +234,7 @@
+         // (an sRGB view inheriting STORAGE from an RGBA8 image). Where the formats match, the image's own usage is
+         // already exact and the create stays as it was. VkImageViewUsageCreateInfo is core 1.1; the port requests 1.3.
+         VkImageViewUsageCreateInfo restriction{VK_STRUCTURE_TYPE_IMAGE_VIEW_USAGE_CREATE_INFO};
+-        if (format != img.format) restriction.usage = usage, ci.pNext = &restriction;
++        if (format != img.format || img.block_renderable) restriction.usage = usage, ci.pNext = &restriction;
+         if (p_vkCreateImageView(vk_device(), &ci, nullptr, &v) != VK_SUCCESS) v = img.view;
+     }
+     if (v) hit = {key, v};  // never a null one: those are tried again
+@@ -700,12 +733,16 @@
+         log("nvn/vk: vs %s inputs (location:format/stream+offset)%s", key.vs->hash.c_str(), line.c_str());
+     }
+     uint32_t unwritten = unwritten_inputs(key.vs, key.fs);
++    uint8_t output_kinds[16] = {};
++    for (uint32_t k = 0; k < std::min<uint32_t>(key.color_count, 8); k++)
++        output_kinds[k] = uint8_t(integer_format_kind(key.color_formats[k]));
+     for (const ShaderInfo* s : {key.vs, key.fs}) {
+         if (!s) continue;
+         auto& st = stages[nstages++];
+         st.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+         st.stage = VkShaderStageFlagBits(stage_bit(s->stage));
+-        st.module = module_of(s, s == key.vs ? int_kinds : nullptr, s == key.fs ? unwritten : 0);
++        st.module = module_of(s, s == key.vs ? int_kinds : nullptr, s == key.fs ? unwritten : 0,
++                             s == key.fs ? output_kinds : nullptr);
+         st.pName = "main";
+     }
+ 
+diff --git a/runtime/src/nvn/nvn_pipeline.h b/runtime/src/nvn/nvn_pipeline.h
+--- a/runtime/src/nvn/nvn_pipeline.h
++++ b/runtime/src/nvn/nvn_pipeline.h
+@@ -110,12 +110,16 @@
+ // Integer vertex inputs (nvn_spirv_patch.cpp): the kind of an NVN attribute format (0 float, 1 unsigned bits,
+ // 2 signed bits), and a copy of a module with those locations declared as integers and bitcast to float on load.
+ uint32_t vertex_int_kind(uint32_t nvn_format);
++uint32_t integer_format_kind(VkFormat format);
+ bool patch_int_inputs(const std::vector<uint32_t>& in, const uint8_t kinds[16], std::vector<uint32_t>& out);
++bool patch_int_outputs(const std::vector<uint32_t>& in, const uint8_t kinds[16], std::vector<uint32_t>& out);
+ // Constant buffer reads with a computed index (c[k][index]) are clamped to the 64 KB a bank can hold, and the
+ // set 0 bindings read that way are returned: those are bound zero-padded to 64 KB (nvn_spirv_patch.cpp).
+ bool clamp_uniform_indices(const std::vector<uint32_t>& in, std::vector<uint32_t>& out, uint64_t* bindings);
+ // Storage buffer bindings the shader writes (nvn_spirv_patch.cpp).
+ uint64_t written_storage_bindings(const ShaderInfo* s);
++bool constant_unit_point_module(const std::vector<uint32_t>& in);
++bool constant_unit_point(const ShaderInfo* shader);
+ uint64_t dynamic_uniform_bindings(const ShaderInfo* s);
+ // Compute: the shared memory array redeclared with the control section's size (the translator declares 48 KB, past
+ // Metal's 32 KB). Fragment: the input locations in `locations` (bit mask) that the vertex stage does not write become
+@@ -150,6 +154,9 @@
+ // and layer; cleared instead when the copies would read past what was staged. Marks it uploaded.
+ // [lo, hi): the bytes of a texture already uploaded that changed (pitch-linear ones send only their rows).
+ void upload_texture(VkCommandBuffer cb, const Texture& t, GpuImage& img, uint64_t lo = 0, uint64_t hi = UINT64_MAX);
++// Pitch-linear colour targets have CPU-readable backing memory. Stage their rows with the submit's buffer
++// write-backs so MemoryPoolInvalidateMappedRange's existing wait makes image writes visible as well.
++void readback_linear_texture(VkCommandBuffer cb, const Texture& t, GpuImage& img, std::vector<WriteBack>& writes);
+ // Every level and layer to zero (colour; magenta with `magenta`), depth and stencil to 0. Leaves TRANSFER_DST.
+ void clear_image(VkCommandBuffer cb, GpuImage& img, bool magenta = false);
+ // PATCH-EMPTY-OPAQUE: every level and layer to opaque (1,1,1,1).
+@@ -164,6 +171,8 @@
+ // The Vulkan format of a view with NVN format `nvn` (0: the image's own) of `img`: the image's when the view's is not
+ // a same-size colour format it can be viewed as.
+ VkFormat view_format(const GpuImage& img, uint32_t nvn);
++VkFormat attachment_format(const GpuImage& img, uint32_t nvn);
++VkExtent2D attachment_extent(const GpuImage& img, uint32_t level, VkFormat format);
+ // Destroys the cached views of an image about to be freed.
+ void forget_image_views(const GpuImage& img);
+ // True when sampled_view() would need no transfer or layout change (it can then be called inside a render pass).
+diff --git a/runtime/src/nvn/nvn_spirv_patch.cpp b/runtime/src/nvn/nvn_spirv_patch.cpp
+--- a/runtime/src/nvn/nvn_spirv_patch.cpp
++++ b/runtime/src/nvn/nvn_spirv_patch.cpp
+@@ -50,8 +50,8 @@
+ }  // namespace
+ 
+ // 0 float (as is), 1 unsigned integer bits, 2 signed integer bits.
+-uint32_t vertex_int_kind(uint32_t nvn_format) {
+-    switch (vk_vertex_format(nvn_format)) {
++uint32_t integer_format_kind(VkFormat format) {
++    switch (format) {
+         case VK_FORMAT_R8_UINT: case VK_FORMAT_R8G8_UINT: case VK_FORMAT_R8G8B8_UINT: case VK_FORMAT_R8G8B8A8_UINT:
+         case VK_FORMAT_R16_UINT: case VK_FORMAT_R16G16_UINT: case VK_FORMAT_R16G16B16_UINT:
+         case VK_FORMAT_R16G16B16A16_UINT: case VK_FORMAT_A2B10G10R10_UINT_PACK32:
+@@ -62,16 +62,33 @@
+             return 2;
+         case VK_FORMAT_R32_UINT: case VK_FORMAT_R32G32_UINT: case VK_FORMAT_R32G32B32_UINT:
+         case VK_FORMAT_R32G32B32A32_UINT:
+-            return nvn_format >= 0x55 && nvn_format <= 0x68 ? 0 : 1;  // 32-bit "scaled" wants the value: keep float
++            return 1;
+         case VK_FORMAT_R32_SINT: case VK_FORMAT_R32G32_SINT: case VK_FORMAT_R32G32B32_SINT:
+         case VK_FORMAT_R32G32B32A32_SINT:
+-            return nvn_format >= 0x55 && nvn_format <= 0x68 ? 0 : 2;
++            return 2;
+         default: return 0;
+     }
+ }
+ 
+-bool patch_int_inputs(const std::vector<uint32_t>& in, const uint8_t kinds[16], std::vector<uint32_t>& out) {
+-    if (in.size() < 5) return false;
++uint32_t vertex_int_kind(uint32_t nvn_format) {
++    VkFormat format = vk_vertex_format(nvn_format);
++    if (nvn_format >= 0x55 && nvn_format <= 0x68) {
++        switch (format) {
++            case VK_FORMAT_R32_UINT: case VK_FORMAT_R32G32_UINT: case VK_FORMAT_R32G32B32_UINT:
++            case VK_FORMAT_R32G32B32A32_UINT: case VK_FORMAT_R32_SINT: case VK_FORMAT_R32G32_SINT:
++            case VK_FORMAT_R32G32B32_SINT: case VK_FORMAT_R32G32B32A32_SINT:
++                return 0;  // 32-bit "scaled" wants the value, not its integer bits.
++            default: break;
++        }
++    }
++    return integer_format_kind(format);
++}
++
++// Maxwell carries raw register bits across integer interfaces. Patch both directions at that boundary:
++// integer vertex loads are bitcast to float; float fragment stores are bitcast to integer, never converted.
++static bool patch_integer_io(const std::vector<uint32_t>& in, const uint8_t kinds[16],
++                             std::vector<uint32_t>& out, uint32_t storage) {
++    if (in.size() < 5 || in[0] != 0x07230203 || !in[3] || in[3] > (1u << 20)) return false;
+     std::vector<Inst> insts;
+     for (size_t i = 5; i < in.size();) {
+         uint32_t len = in[i] >> 16;
+@@ -93,19 +110,23 @@
+         else if (n.op == OpTypeFloat && n.len == 3 && w[2] == 32) f32 = w[1];
+         else if (n.op == OpTypeVector && n.len == 4) vecs[{w[2], w[3]}] = w[1];
+         else if (n.op == OpTypePointer && n.len == 4) ptrs[{w[2], w[3]}] = w[1];
+-        if (n.op >= OpTypeInt && n.op <= OpTypePointer) defined_at[w[1]] = n.at;
++        if (n.op >= OpTypeInt && n.op <= OpTypePointer) {
++            if (n.len < 2) return false;
++            defined_at[w[1]] = n.at;
++        }
+     }
+     if (!f32) return false;
+     uint32_t v4f = vecs.count({f32, 4}) ? vecs[{f32, 4}] : 0;
+-    uint32_t ptr_v4f = v4f && ptrs.count({StorageInput, v4f}) ? ptrs[{StorageInput, v4f}] : 0;
++    uint32_t ptr_v4f = v4f && ptrs.count({storage, v4f}) ? ptrs[{storage, v4f}] : 0;
+     if (!ptr_v4f) return false;
+ 
+-    // The input variables to change, and the types they need (added before the first function when missing).
++    // The interface variables to change, and the types they need.
+     std::map<uint32_t, uint32_t> patched;  // variable or access chain id -> signedness (0 unsigned, 1 signed)
++    std::set<uint32_t> scalar_pointers;
+     size_t insert_at = in.size();          // the new types go right before the first patched variable
+     for (const Inst& n : insts) {
+         const uint32_t* w = &in[n.at];
+-        if (n.op != OpVariable || n.len < 4 || w[3] != StorageInput || w[1] != ptr_v4f) continue;
++        if (n.op != OpVariable || n.len < 4 || w[3] != storage || w[1] != ptr_v4f) continue;
+         auto l = location.find(w[2]);
+         if (l == location.end() || l->second >= 16 || !kinds[l->second]) continue;
+         patched[w[2]] = kinds[l->second] == 2 ? 1 : 0;
+@@ -132,8 +153,8 @@
+         };
+         t[s].scalar = get(ints, {32, s}, OpTypeInt, 32, s);
+         t[s].vec4 = get(vecs, {t[s].scalar, 4}, OpTypeVector, t[s].scalar, 4);
+-        t[s].ptr_scalar = get(ptrs, {StorageInput, t[s].scalar}, OpTypePointer, StorageInput, t[s].scalar);
+-        t[s].ptr_vec4 = get(ptrs, {StorageInput, t[s].vec4}, OpTypePointer, StorageInput, t[s].vec4);
++        t[s].ptr_scalar = get(ptrs, {storage, t[s].scalar}, OpTypePointer, storage, t[s].scalar);
++        t[s].ptr_vec4 = get(ptrs, {storage, t[s].vec4}, OpTypePointer, storage, t[s].vec4);
+     }
+ 
+     if (!ok) return false;
+@@ -145,9 +166,10 @@
+             w[1] = t[patched[w[2]]].ptr_vec4;
+         } else if ((n.op == OpAccessChain || n.op == OpInBoundsAccessChain) && n.len >= 4 && patched.count(w[3])) {
+             uint32_t s = patched[w[3]];
+-            if (n.len == 4) return false;  // a chain with no index: not produced by the translator
++            if (n.len != 5 || scalar_pointers.count(w[3])) return false;  // exactly one vec4 component
+             w[1] = t[s].ptr_scalar;  // one index into a vec4: a scalar
+             patched[w[2]] = s;
++            scalar_pointers.insert(w[2]);
+         } else if (n.op == OpLoad && n.len >= 4 && patched.count(w[3])) {
+             uint32_t s = patched[w[3]], type = w[1], result = w[2], loaded = bound++;
+             w[1] = type == v4f ? t[s].vec4 : t[s].scalar;
+@@ -155,6 +177,11 @@
+             out.insert(out.end(), w.begin(), w.end());
+             out.insert(out.end(), {(4u << 16) | OpBitcast, type, result, loaded});
+             continue;
++        } else if (storage == 3 && n.op == 62 && n.len >= 3 && patched.count(w[1])) {
++            uint32_t s = patched[w[1]], cast = bound++;
++            uint32_t type = scalar_pointers.count(w[1]) ? t[s].scalar : t[s].vec4;
++            out.insert(out.end(), {(4u << 16) | OpBitcast, type, cast, w[2]});
++            w[2] = cast;
+         } else if (n.op == 62 || n.op == 63 || n.op == 57 || n.op == 83 || n.op == 67) {
+             // OpStore, OpCopyMemory, OpFunctionCall, OpCopyObject, OpPtrAccessChain on a patched pointer would keep
+             // the float type (the translator emits none of them for inputs): leave this module as it is.
+@@ -165,6 +192,14 @@
+     }
+     out[3] = bound;
+     return true;
++}
++
++bool patch_int_inputs(const std::vector<uint32_t>& in, const uint8_t kinds[16], std::vector<uint32_t>& out) {
++    return patch_integer_io(in, kinds, out, StorageInput);
++}
++
++bool patch_int_outputs(const std::vector<uint32_t>& in, const uint8_t kinds[16], std::vector<uint32_t>& out) {
++    return patch_integer_io(in, kinds, out, 3);  // StorageClass Output
+ }
+ 
+ // ---- constant buffer reads past the bound size ------------------------------------------------------------------
+@@ -632,4 +667,136 @@
+     return cache[s] = mask;
+ }
+ 
++// A conservative proof for constant, single-pixel reduction points. Do not infer this from a shader hash:
++// all Position/PointSize stores must be constant, with no control flow, calls or pointer aliases.
++bool constant_unit_point_module(const std::vector<uint32_t>& in) {
++    if (in.size() < 5 || in[0] != 0x07230203 || !in[3] || in[3] > (1u << 20)) return false;
++    enum Kind { Other, Block, Position, PointSize, Component };
++    struct Id {
++        uint32_t bits = 0, pointee = 0, structure = 0, component = 0;
++        int builtin = -1;
++        Kind pointer = Other;
++        bool float32 = false, vec4 = false, scalar = false, float_constant = false, center = false;
++    };
++    std::vector<Id> ids(in[3]);
++    std::map<std::pair<uint32_t, uint32_t>, uint32_t> members;
++    unsigned functions = 0, returns = 0, positions = 0, sizes = 0;
++    auto valid = [&](uint32_t id) { return id < ids.size(); };
++    for (size_t i = 5; i < in.size();) {
++        uint32_t len = in[i] >> 16, op = in[i] & 0xffff;
++        if (!len || len > in.size() - i) return false;
++        const uint32_t* w = &in[i];
++        switch (op) {
++        case 71:  // OpDecorate BuiltIn
++            if (len >= 4 && w[2] == 11) {
++                if (!valid(w[1])) return false;
++                ids[w[1]].builtin = int(w[3]);
++            }
++            break;
++        case 72:  // OpMemberDecorate BuiltIn
++            if (len >= 5 && w[3] == 11) members[{w[1], w[2]}] = w[4];
++            break;
++        case 22:  // OpTypeFloat
++            if (len != 3 || !valid(w[1])) return false;
++            ids[w[1]].float32 = w[2] == 32;
++            break;
++        case 23:  // OpTypeVector
++            if (len != 4 || !valid(w[1]) || !valid(w[2])) return false;
++            ids[w[1]].vec4 = ids[w[2]].float32 && w[3] == 4;
++            break;
++        case 32:  // OpTypePointer: only Output pointers matter
++            if (len != 4 || !valid(w[1]) || !valid(w[3])) return false;
++            if (w[2] == 3) ids[w[1]].pointee = w[3];
++            break;
++        case 43:  // OpConstant
++            if (len == 4) {
++                if (!valid(w[1]) || !valid(w[2])) return false;
++                ids[w[2]].scalar = true;
++                ids[w[2]].float_constant = ids[w[1]].float32;
++                ids[w[2]].bits = w[3];
++            }
++            break;
++        case 44:  // OpConstantComposite: exact (0, 0, 0, 1)
++            if (len == 7) {
++                for (unsigned k = 1; k < 7; k++) if (!valid(w[k])) return false;
++                bool center = ids[w[1]].vec4;
++                for (unsigned k = 3; k < 7; k++)
++                    center &= ids[w[k]].float_constant && ids[w[k]].bits == (k == 6 ? 0x3f800000u : 0);
++                ids[w[2]].center = center;
++            }
++            break;
++        case 59:  // OpVariable
++            if (len < 4 || !valid(w[1]) || !valid(w[2])) return false;
++            if (w[3] == 3) {
++                if (len != 4) return false;  // an Output initializer would be another write
++                auto& id = ids[w[2]];
++                if (id.builtin == 0) id.pointer = Position;
++                else if (id.builtin == 1) id.pointer = PointSize;
++                else {
++                    id.structure = ids[w[1]].pointee;
++                    for (const auto& m : members)
++                        if (m.first.first == id.structure && m.second <= 1) id.pointer = Block;
++                }
++            }
++            break;
++        case 65: case 66:  // OpAccessChain / OpInBoundsAccessChain
++            if (len < 5 || !valid(w[2]) || !valid(w[3])) return false;
++            if (ids[w[3]].pointer == PointSize || ids[w[3]].pointer == Component) return false;
++            if (ids[w[3]].pointer == Position) {
++                if (len != 5 || !valid(w[4]) || !ids[w[4]].scalar || ids[w[4]].float_constant || ids[w[4]].bits > 3)
++                    return false;
++                ids[w[2]].pointer = Component;
++                ids[w[2]].component = ids[w[4]].bits;
++            }
++            if (ids[w[3]].pointer == Block) {
++                if (len > 6 || !valid(w[4]) || !ids[w[4]].scalar || ids[w[4]].float_constant) return false;
++                auto m = members.find({ids[w[3]].structure, ids[w[4]].bits});
++                if (m != members.end() && m->second <= 1) {
++                    ids[w[2]].pointer = m->second == 0 ? Position : PointSize;
++                    if (len == 6) {
++                        if (m->second != 0 || !valid(w[5]) || !ids[w[5]].scalar || ids[w[5]].float_constant || ids[w[5]].bits > 3)
++                            return false;
++                        ids[w[2]].pointer = Component;
++                        ids[w[2]].component = ids[w[5]].bits;
++                    }
++                }
++            }
++            break;
++        case 62:  // OpStore
++            if (len < 3 || !valid(w[1]) || !valid(w[2])) return false;
++            switch (ids[w[1]].pointer) {
++            case Position: if (!ids[w[2]].center) return false; positions = 15; break;
++            case Component:
++                if (!ids[w[2]].float_constant || ids[w[2]].bits != (ids[w[1]].component == 3 ? 0x3f800000u : 0))
++                    return false;
++                positions |= 1u << ids[w[1]].component;
++                break;
++            case PointSize:
++                if (!ids[w[2]].float_constant || ids[w[2]].bits != 0x3f800000) return false;
++                sizes++;
++                break;
++            case Block: return false;
++            default: break;
++            }
++            break;
++        case 54: functions++; break;  // OpFunction
++        case 253: returns++; break;  // OpReturn
++        case 12: case 55: case 57: case 63: case 64: case 67: case 70: case 83: case 169:
++        case 245: case 246: case 247: case 249: case 250: case 251: case 254: case 255:
++            return false;  // calls, aliases or control flow: no proof
++        default: break;
++        }
++        i += len;
++    }
++    return functions == 1 && returns == 1 && positions == 15 && sizes;
++}
++
++bool constant_unit_point(const ShaderInfo* shader) {
++    static std::mutex lock;
++    static std::map<const ShaderInfo*, bool> cache;
++    std::lock_guard lk(lock);
++    if (auto it = cache.find(shader); it != cache.end()) return it->second;
++    return cache[shader] = constant_unit_point_module(shader->spirv);
++}
++
+ }  // namespace nx::nvn
+diff --git a/runtime/src/nvn/nvn_upload.cpp b/runtime/src/nvn/nvn_upload.cpp
+--- a/runtime/src/nvn/nvn_upload.cpp
++++ b/runtime/src/nvn/nvn_upload.cpp
+@@ -4,6 +4,7 @@
+ #include <cstdio>
+ #include <cstdlib>
+ #include <map>
++#include <numeric>
+ #include <tuple>
+ #include <nx/runtime.h>  // PATCH-ATLAS-DUMP (nx::g_frame)
+ #include <cstring>
+@@ -18,6 +19,41 @@
+ namespace nx::nvn {
+ 
+ using namespace nx::vk;
++
++void readback_linear_texture(VkCommandBuffer cb, const Texture& t, GpuImage& img, std::vector<WriteBack>& writes) {
++    if (!(t.flags & 0x40) || !t.memory || !t.stride || t.levels != 1 || t.depth != 1 ||
++        img.levels != 1 || img.layers != 1 || img.depth != 1 || t.samples > 1 ||
++        img.aspect != VK_IMAGE_ASPECT_COLOR_BIT || img.format != vk_format(t.format)) return;
++    uint32_t bw = 0, bh = 0, bytes = 0;
++    format_block(t.format, bw, bh, bytes);
++    if (bw != 1 || bh != 1 || !bytes || bytes != vk_block_bytes(img.format) ||
++        !img.width || !img.height || img.width != t.width || img.height != t.height) return;
++    const uint64_t row = uint64_t(img.width) * bytes;
++    const uint64_t span = uint64_t(img.height - 1) * t.stride + row;
++    if (row > t.stride || (t.storage_size && span > t.storage_size) || span > (64ull << 20) ||
++        t.memory > UINT64_MAX - span) return;
++    const uint32_t alignment = std::lcm(4u, bytes);
++    Upload u = upload_alloc(row * img.height + alignment, 16);
++    const uint64_t shift = (alignment - u.offset % alignment) % alignment;
++    u.offset += shift;
++    u.ptr += shift;
++    VkImageLayout back = img.layout;
++    transition(cb, img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
++    VkBufferImageCopy r{};
++    r.bufferOffset = u.offset;
++    r.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
++    r.imageExtent = {img.width, img.height, 1};
++    p_vkCmdCopyImageToBuffer(cb, img.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, u.buffer, 1, &r);
++    transition(cb, img, back);
++    VkMemoryBarrier mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
++    mb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
++    mb.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
++    p_vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &mb, 0, nullptr, 0, nullptr);
++    // Copy only texels, not pitch padding. The upload allocation remains mapped and alive until the submit retires.
++    auto* guest = reinterpret_cast<uint8_t*>(t.memory);
++    for (uint32_t y = 0; y < img.height; y++)
++        writes.push_back({u.ptr + y * row, guest + uint64_t(y) * t.stride, row, {}});
++}
+ 
+ namespace {
+ 
+diff --git a/runtime/src/nvn/nvn_vk.h b/runtime/src/nvn/nvn_vk.h
+--- a/runtime/src/nvn/nvn_vk.h
++++ b/runtime/src/nvn/nvn_vk.h
+@@ -35,6 +35,7 @@
+     VkComponentMapping swizzle{};  // for sampling (attachment views stay identity)
+     bool storage = false;          // created with VK_IMAGE_USAGE_STORAGE_BIT (compute shaders write it)
+     bool mutable_format = true;
++    bool block_renderable = false;  // native compressed storage permits an uncompressed block attachment view
+     uint64_t rendered_at = 0;      // the pass-end serial of the last pass that rendered into it (nvn_draw.cpp, G4)    // views may use another format (MUTABLE_FORMAT; nvn_image.cpp, ubwc_flags)
+     // An R8 texture always read as (1, 1, 1, R) (a glyph cache): stored as RGBA8 (255, 255, 255, R) and sampled
+     // without swizzle. MoltenVK returned alpha 0 for that view swizzle on a 2D-array view, so all text was invisible.

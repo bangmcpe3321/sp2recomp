@@ -12,6 +12,28 @@ used to establish it, and how far the port has got.
 
 ## Current state
 
+### Tutorial lighting update — November 21, 2026
+
+The Windows runtime now renders the tutorial's textured world without the former
+neon/black lighting failure. The fixes cover GPU-to-CPU lighting readback,
+compressed-cube attachment views, integer shader interfaces, instance semantics,
+unit-point coverage, and registered texture identity and lifetime. The six-axis
+state layout/history is also corrected so the game can process supplied motion
+samples. PlayerMake's colored hair, visible irises and textured clothes were
+checked again with this build.
+
+![Tutorial scene after the runtime lighting fixes](docs/images/tutorial-lighting-verified.png)
+
+*Actual Windows runtime output, with the tutorial's aiming instructions visible.
+Remaining banding/speckle is not declared fixed. This is not proof of completing
+the tutorial, and it does not add physical gyro or mouse-to-gyro input.*
+
+See [the fixes, measured checks and limitations](docs/TUTORIAL_LIGHTING.md), the
+[apply/restore helper](tools/patches/patch-tutorial-lighting-sixaxis.py),
+[seven sanitizer regressions](tools/verify-tutorial-runtime.py), and the
+[HDR capture check](tools/verify-tutorial-capture.py). Apply this patch after the
+PlayerMake patch below; both target the separate `sp2port` runtime.
+
 ### PlayerMake rendering update — November 21, 2026
 
 The verified isolated Windows runs now render the Inklings' eyes, skin, hair,
@@ -25,7 +47,8 @@ attachment is present. The empty fragment shaders were not the cause.
 *Late-frame replay from the isolated run: sampled live frames 300–6,300 remained
 correct. A separate run without RenderDoc or atlas-refresh overrides stayed
 correct through frame 3,000. One earlier concurrent-replay run went dark; that
-stress case remains unresolved. Tutorial and plaza rendering are not claimed fixed.*
+stress case remains unresolved. Those PlayerMake-only checks did not verify
+tutorial or plaza rendering.*
 
 See [the measured fix and verification](docs/PLAYERMAKE_FIX.md), the
 [apply/restore helper](tools/patches/patch-playermake-descriptor-winding.py), and the
