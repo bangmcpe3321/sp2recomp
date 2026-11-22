@@ -26,7 +26,7 @@ def main():
         parser.error('Apply the PlayerMake descriptor-identity patch first')
 
     def run(reverse, check):
-        command = ['git', 'apply']
+        command = ['git', '-c', 'core.autocrlf=false', 'apply']
         if reverse:
             command.append('--reverse')
         if check:
