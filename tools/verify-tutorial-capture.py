@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check a tutorial/Aim-step RenderDoc capture for the former saturated HDR failure.
+"""Check a tutorial/Aim-step capture's HDR range and optional tonemap filtering.
 
 Requires RenderDoc's Python module on PYTHONPATH. This checks the captured view,
 not completion of the tutorial, other scenes, or all possible HDR lighting.
@@ -19,6 +19,8 @@ def main():
     parser.add_argument('--max-hdr', type=float, default=1000.0,
                         help='Upper HDR bound for this tutorial view (default: 1000)')
     parser.add_argument('--save-frame', type=Path, help='Optionally save the final replay color target as PNG')
+    parser.add_argument('--require-linear-lut', action='store_true',
+                        help='Also require linear min/mag filtering on the tonemap 3D lookup')
     args = parser.parse_args()
     if not math.isfinite(args.max_hdr) or args.max_hdr <= 0:
         parser.error('--max-hdr must be finite and positive')
@@ -56,6 +58,38 @@ def main():
         if max(maximum) <= 0.01:
             raise RuntimeError(f'HDR scene is black: max={maximum}')
         print(f'PASS: scene {scene}, event {writer.eventId}, min={minimum}, max={maximum}')
+
+        if args.require_linear_lut:
+            luts = {t.resourceId for t in textures.values()
+                    if t.depth > 1 and t.arraysize == 1 and 'R11G11B10' in t.format.Name()}
+            previous_outputs = None
+            found = False
+            for action in draws:
+                outputs = tuple(action.outputs)
+                first_in_pass = outputs != previous_outputs
+                previous_outputs = outputs
+                if not first_in_pass or action.eventId <= writer.eventId:
+                    continue
+                if not any(resource in textures and any(name in textures[resource].format.Name()
+                           for name in ('R10G10B10A2', 'A2B10G10R10', 'A2R10G10B10'))
+                           for resource in outputs):
+                    continue
+                controller.SetFrameEvent(action.eventId, True)
+                used = list(controller.GetPipelineState().GetReadOnlyResources(rd.ShaderStage.Pixel))
+                lookups = [d for d in used if d.descriptor.resource in luts]
+                if not lookups or not any(d.descriptor.resource == scene for d in used):
+                    continue
+                for lookup in lookups:
+                    filtering = lookup.sampler.filter
+                    if filtering.minify != rd.FilterMode.Linear or filtering.magnify != rd.FilterMode.Linear:
+                        raise RuntimeError(
+                            f'Tonemap LUT {lookup.descriptor.resource} at event {action.eventId} '
+                            f'is not linear: min={filtering.minify}, mag={filtering.magnify}')
+                    print(f'PASS: tonemap event {action.eventId}, LUT {lookup.descriptor.resource}, linear min/mag')
+                found = True
+                break
+            if not found:
+                raise RuntimeError('No tonemap pass sampling both the scene and a 3D lookup was found')
 
         if args.save_frame:
             controller.SetFrameEvent(draws[-1].eventId, True)

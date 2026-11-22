@@ -1,0 +1,135 @@
+diff --git a/runtime/src/nvn/nvn_sampler_objects.cpp b/runtime/src/nvn/nvn_sampler_objects.cpp
+index b0748f7..a47cea6 100644
+--- a/runtime/src/nvn/nvn_sampler_objects.cpp
++++ b/runtime/src/nvn/nvn_sampler_objects.cpp
+@@ -6,6 +6,7 @@
+ //   GetMinMagFilter(s, &min, &mag)   GetWrapMode(s, &s, &t, &r)   GetLodClamp(s, &min, &max)   GetLodBias(s) -> float
+ //   GetCompare(s, &mode, &func)      GetBorderColor(s, float[4])  GetMaxAnisotropy(s) -> float
+ //   GetReductionFilter(s) -> enum
++#include <atomic>
+ #include <cstdlib>
+ #include <cstring>
+ 
+@@ -15,9 +16,25 @@ namespace nx::nvn {
+ 
+ namespace {
+ 
+-struct Sampler : Object {
+-    SamplerInfo info;
+-};
++// AGL copies the complete 0x60-byte NVNsampler into its registration cache
++// (NVNMgr::registerSampler). An address-only host object loses those copies.
++// Keep a value descriptor in the opaque bytes, not a pointer to the original.
++constexpr uint64_t sampler_magic = 0x31524c504d53564eull;
++constexpr size_t sampler_bytes = 0x60;
++static_assert(sizeof(SamplerInfo) == 64);
++static_assert(sizeof(sampler_magic) + sizeof(SamplerInfo) <= sampler_bytes);
++
++void write_sampler_info(uint64_t guest, const SamplerInfo& info) {
++    std::memset(reinterpret_cast<void*>(guest), 0, sampler_bytes);
++    std::memcpy(reinterpret_cast<void*>(guest + sizeof(sampler_magic)), &info, sizeof info);
++    st<uint64_t>(guest, sampler_magic);
++}
++
++bool read_sampler_info(uint64_t guest, SamplerInfo& info) {
++    if (!guest || ld<uint64_t>(guest) != sampler_magic) return false;
++    std::memcpy(&info, reinterpret_cast<const void*>(guest + sizeof(sampler_magic)), sizeof info);
++    return true;
++}
+ 
+ SamplerInfo decode_builder(CPU& c, uint64_t b) {
+     SamplerInfo s;
+@@ -40,21 +57,29 @@ SamplerInfo decode_builder(CPU& c, uint64_t b) {
+ 
+ void log_sampler(const SamplerInfo& s) {
+     static const bool on = std::getenv("NX_NVN_STATES") != nullptr;
+-    if (on)
+-        log("nvn state sampler: filter %u/%u wrap %u %u %u lod %g..%g bias %g compare %u/%u aniso %g reduction %u",
+-            s.min_filter, s.mag_filter, s.wrap[0], s.wrap[1], s.wrap[2], double(s.lod_min), double(s.lod_max),
+-            double(s.lod_bias), s.compare_mode, s.compare_func, double(s.max_anisotropy), s.reduction);
++    if (!on) return;
++    // Initializers are frequent. Keep this opt-in trace useful without serializing
++    // every call behind the logger's synchronous file flushes.
++    static std::atomic<uint64_t> calls{0};
++    const uint64_t call = calls.fetch_add(1, std::memory_order_relaxed);
++    if (call == 64) log("nvn state sampler: sampling trace every 4096 calls after the first 64");
++    if (call >= 64 && call % 4096 != 0) return;
++    log("nvn state sampler: filter %u/%u wrap %u %u %u lod %g..%g bias %g compare %u/%u aniso %g reduction %u",
++        s.min_filter, s.mag_filter, s.wrap[0], s.wrap[1], s.wrap[2], double(s.lod_min), double(s.lod_max),
++        double(s.lod_bias), s.compare_mode, s.compare_func, double(s.max_anisotropy), s.reduction);
+ }
+ 
+ void SamplerInitialize(CPU& c) {  // NVNboolean (NVNsampler*, const NVNsamplerBuilder*)
+     uint64_t guest = c.x[0], builder = c.x[1];
+     SamplerInfo info = decode_builder(c, builder);
+-    make<Sampler>(guest).info = info;
++    write_sampler_info(guest, info);
+     log_sampler(info);
+     c.x[0] = 1;
+ }
+ 
+-void SamplerFinalize(CPU& c) { destroy(c.x[0]); }
++void SamplerFinalize(CPU& c) {
++    if (c.x[0]) st<uint64_t>(c.x[0], 0);
++}
+ 
+ void register_info(uint64_t pool, uint32_t id, const SamplerInfo& info) {
+     if (auto* d = get<DescriptorPool>(pool)) {
+@@ -69,18 +94,32 @@ void register_info(uint64_t pool, uint32_t id, const SamplerInfo& info) {
+ }
+ 
+ void RegisterSampler(CPU& c) {  // (NVNsamplerPool*, int id, const NVNsampler*)
+-    if (auto* s = get<Sampler>(c.x[2])) register_info(c.x[0], uint32_t(c.x[1]), s->info);
++    SamplerInfo info;
++    if (read_sampler_info(c.x[2], info)) register_info(c.x[0], uint32_t(c.x[1]), info);
++    else if (std::getenv("NX_NVN_STATES")) {
++        static unsigned missing = 0;
++        if (missing++ < 32)
++            log("nvn state sampler registration missing object: pool %llx slot %u sampler %llx",
++                (unsigned long long)c.x[0], unsigned(c.x[1]), (unsigned long long)c.x[2]);
++    }
+ }
+ 
+ void RegisterSamplerBuilder(CPU& c) {  // (NVNsamplerPool*, int id, const NVNsamplerBuilder*)
+     SamplerInfo info = decode_builder(c, c.x[2]);
++    log_sampler(info);
+     register_info(c.x[0], uint32_t(c.x[1]), info);
+ }
+ 
+-const SamplerInfo& info_of(uint64_t guest) {
+-    static const SamplerInfo none;
+-    auto* s = get<Sampler>(guest);
+-    return s ? s->info : none;
++SamplerInfo info_of(uint64_t guest) {
++    SamplerInfo info;
++    read_sampler_info(guest, info);
++    return info;
++}
++
++void SamplerCompare(CPU& c) {
++    SamplerInfo a, b;
++    c.x[0] = read_sampler_info(c.x[0], a) && read_sampler_info(c.x[1], b) &&
++             std::memcmp(&a, &b, sizeof a) == 0;
+ }
+ 
+ void GetMinMagFilter(CPU& c) {
+@@ -119,6 +158,7 @@ void GetBorderColor(CPU& c) {
+ 
+ NX_HLE("nvnSamplerInitialize", SamplerInitialize);
+ NX_HLE("nvnSamplerFinalize", SamplerFinalize);
++NX_HLE("nvnSamplerCompare", SamplerCompare);
+ NX_HLE("nvnSamplerPoolRegisterSampler", RegisterSampler);
+ NX_HLE("nvnSamplerPoolRegisterSamplerBuilder", RegisterSamplerBuilder);
+ NX_HLE("nvnSamplerGetMinMagFilter", GetMinMagFilter);
+diff --git a/runtime/src/platform_win.cpp b/runtime/src/platform_win.cpp
+index ab46a92..a5fa6f4 100644
+--- a/runtime/src/platform_win.cpp
++++ b/runtime/src/platform_win.cpp
+@@ -387,6 +387,7 @@ static LRESULT CALLBACK wndproc(HWND h, UINT msg, WPARAM w, LPARAM l) {
+                 if (g_mouse_have_last) {
+                     g_mouse_dx.fetch_add(c.x - g_mouse_last.x, std::memory_order_relaxed);
+                     g_mouse_dy.fetch_add(c.y - g_mouse_last.y, std::memory_order_relaxed);
++                    g_mouse_last = c;
+                     // Re-centre once the cursor drifts away from the middle, so it never pins against a screen edge.
+                     RECT r{};
+                     GetClientRect(h, &r);

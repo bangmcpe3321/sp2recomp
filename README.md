@@ -12,6 +12,21 @@ used to establish it, and how far the port has got.
 
 ## Current state
 
+### Sampler-copy and mouse-input follow-up — November 22, 2026
+
+Further tracing found that copied sampler objects were silently dropped, leaving
+nearest filtering where the game requested linear or trilinear filtering. The
+runtime now preserves sampler values through copies and registration, including
+copies over an already initialized object. Requested point filtering is preserved.
+A reproduced mouse-delta accumulation error is also corrected, and verbose
+sampler-state logging is bounded instead of flushing a line on every initialization.
+
+These are specific runtime fixes, **not** a claim that tutorial aim automation,
+missing ink, or all remaining floor/color artifacts are fixed. See the
+[evidence and limitations](docs/SAMPLER_COPIES_MOUSE.md), the
+[apply/restore helper](tools/patches/patch-sampler-copies-mouse.py), and the
+[nine runtime sanitizer checks](tools/verify-tutorial-runtime.py).
+
 ### Tutorial lighting update — November 21, 2026
 
 The Windows runtime now renders the tutorial's textured world without the former
@@ -30,7 +45,7 @@ the tutorial, and it does not add physical gyro or mouse-to-gyro input.*
 
 See [the fixes, measured checks and limitations](docs/TUTORIAL_LIGHTING.md), the
 [apply/restore helper](tools/patches/patch-tutorial-lighting-sixaxis.py),
-[seven sanitizer regressions](tools/verify-tutorial-runtime.py), and the
+[runtime sanitizer regressions](tools/verify-tutorial-runtime.py), and the
 [HDR capture check](tools/verify-tutorial-capture.py). Apply this patch after the
 PlayerMake patch below; both target the separate `sp2port` runtime.
 
