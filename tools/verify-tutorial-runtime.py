@@ -24,6 +24,7 @@ def main():
         ('test_instance_chunk.py', 'runtime/src/nvn/nvn_draw.cpp'),
         ('test_integer_shader_io.py', 'runtime/src/nvn/nvn_spirv_patch.cpp'),
         ('test_sampler_copies.py', 'runtime/src/nvn/nvn_sampler_objects.cpp'),
+        ('test_texture_copies.py', 'runtime/src/nvn/nvn_copy.cpp'),
         ('test_mouse_movement.py', 'runtime/src/platform_win.cpp'),
         ('test_unit_point.py', None),
     ]

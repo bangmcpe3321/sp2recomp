@@ -1,0 +1,16 @@
+--- a/runtime/src/nvn/nvn_copy.cpp
++++ b/runtime/src/nvn/nvn_copy.cpp
+@@ -53,3 +53,12 @@
+     }
+-    record(c.x[0], cmd, &info, sizeof info);
++    // Copied NVN descriptors name immutable storage, even after their scratch
++    // address or the original texture is reused before command-list replay.
++    std::vector<std::shared_ptr<RecordedTexture>> textures;
++    for (unsigned side = 0; side < 2; ++side) {
++        if (auto texture = record_texture_descriptor(cmd.a[side])) {
++            cmd.a[side] = texture->key;
++            textures.push_back(std::move(texture));
++        }
++    }
++    record(c.x[0], cmd, &info, sizeof info, std::move(textures));
+ }

@@ -12,6 +12,15 @@ used to establish it, and how far the port has got.
 
 ## Current state
 
+### Plaza Inkling faces — November 22, 2026
+
+Copied texture descriptors were also being dropped by texture-to-texture copies,
+leaving generated body atlases unfilled. Retaining both copy operands with the
+command list restores solid Inkling faces and skin in the café scene. See the
+[measured fix and limitations](docs/PLAZA_FACE_TEXTURE_COPIES.md),
+[apply/restore helper](tools/patches/patch-plaza-texture-copy-descriptors.py), and
+[ten runtime sanitizer checks](tools/verify-tutorial-runtime.py).
+
 ### Sampler-copy and mouse-input follow-up — November 22, 2026
 
 Further tracing found that copied sampler objects were silently dropped, leaving
