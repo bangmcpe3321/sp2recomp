@@ -21,6 +21,8 @@ command list restores solid Inkling faces and skin in the café scene. See the
 [apply/restore helper](tools/patches/patch-plaza-texture-copy-descriptors.py), and
 [ten runtime sanitizer checks](tools/verify-tutorial-runtime.py).
 
+![Verified plaza Inkling faces](docs/images/plaza-faces-verified.png)
+
 ### Sampler-copy and mouse-input follow-up — November 22, 2026
 
 Further tracing found that copied sampler objects were silently dropped, leaving
@@ -34,7 +36,7 @@ These are specific runtime fixes, **not** a claim that tutorial aim automation,
 missing ink, or all remaining floor/color artifacts are fixed. See the
 [evidence and limitations](docs/SAMPLER_COPIES_MOUSE.md), the
 [apply/restore helper](tools/patches/patch-sampler-copies-mouse.py), and the
-[nine runtime sanitizer checks](tools/verify-tutorial-runtime.py).
+[ten runtime sanitizer checks](tools/verify-tutorial-runtime.py).
 
 ### Tutorial lighting update — November 21, 2026
 
@@ -79,6 +81,12 @@ See [the measured fix and verification](docs/PLAYERMAKE_FIX.md), the
 [capture regression check](tools/verify-playermake-capture.py). The patch targets
 the separate `sp2port` runtime; this repository does not contain game assets or
 the generated game executable. Older screenshots and findings below are historical.
+
+### Historical route observations
+
+The route notes below describe earlier builds. The verified café face result above
+supersedes the old missing-skin diagnosis; free-roaming plaza rendering has not
+been reverified by this fix.
 
 The recompiled port runs the game's own code on Vulkan on Windows. The title screen renders at
 1920×1080. PlayerMake character creation completes with legible text, the intro cutscene plays,
@@ -135,7 +143,7 @@ region, which is a rendered sky, not a flat fill. The `B` prompt backs out of th
 
 *The same plaza at rest, in `cProgress` with the NPC page closed and the camera turned: the
 NPC/action markers and the HUD draw, but no stage geometry and no sky (98% of pixels black).
-This is the current rendering blocker, described under "The plaza" below.*
+This is an earlier-build observation, described under "The plaza" below.*
 
 ![The tutorial aim step, passed](docs/images/tutorial-aim-legible.png)
 
@@ -229,6 +237,12 @@ Six fixes took the port from a boot fatal to this point:
 
 ### The plaza
 
+**November 22 update:** the café scene now renders the square and intact Inkling
+faces in isolated runs with and without RenderDoc. See the
+[texture-copy fix](docs/PLAZA_FACE_TEXTURE_COPIES.md). The following measurements
+are historical; they do not describe the newly verified café scene. Free-roaming
+plaza rendering still needs a separate check.
+
 After the news, `SeqMgrPlaza` runs `5 cNews → 7 cGetTurbunShell → 1 cPreProgress → 2 cProgress`.
 The Turbun Shell reward is the pop-up at frames 10000–15000 of the plaza run; `cProgress` is
 Inkopolis Square, HUD up, with NPC/action markers on screen. The state names are the
@@ -296,12 +310,10 @@ draws arrive after the composite viewport has been blitted.
 
 Open:
 
-- **The plaza's 3D world.** `SeqMgrPlaza::stateProgress` runs, the HUD and markers draw, and the
-  stage's pipelines and textures build, but the square's own geometry and sky leave no pixels at
-  rest — only the NPC gear page's camera renders the stage sky (see "The plaza"). First suspect:
-  the stage pass itself, since the composite's scissored clears only cover the 960×540 viewport,
-  and the pipeline cache thrash (512 cap, 3–5 million `no program` draws) is what makes the
-  replay drop draws.
+- **Free-roaming plaza rendering.** The November 22 fix verifies the café camera,
+  the square behind it and NPC faces. Earlier `cProgress` routes produced a black
+  scene; those routes have not yet been repeated with the latest runtime. See the
+  [verified scope](docs/PLAZA_FACE_TEXTURE_COPIES.md).
 - **UI job stall at the character→tutorial transition.** About one boot in three the game stops
   advancing at frame ~2933–2942 with no render thread activity: the main thread waits in
   `Lp::UI::Impl::JobMgr::endRun` on a light event while a UI job worker is still inside
@@ -370,7 +382,7 @@ Open:
 | Subsystem decomposition | Done (55 namespaces) |
 | Engine & middleware identification | Done |
 | **Function-body decompilation** | **Not done** — see [Limitations](#limitations) |
-| **Recompiled PC port** | Boots to the in-game UI: `RootTask::prepare_`, display loop, PlayerMake character creation, the title screen at 1920×1080, and the first-launch tutorial - [RECOMP_BOOT_TO_UI.md](doc/RECOMP_BOOT_TO_UI.md). The tutorial advances past aim/ZR with legible guide text, and the Move page's central 960×540 3D room renders. The tutorial→plaza boundary is under test: an idempotent patch redirects the tutorial's `5 → 6` to warp state 7, and the 21-state UI/page manager's real `4 → 5` handoff loads the Off the Hook news scene (the old table's state-5 entry is null because the transition creates a new page manager). The earlier `4 → 7` detour reached the gear-selection screen and stalled at null state 9; it is a diagnostic, not the plaza path. The 3D plaza is still unconfirmed; the news scene and its two hosts render in the central 960×540 viewport. About one boot in three stalls at the character→tutorial UI job transition. |
+| **Recompiled PC port** | Boots to the in-game UI: `RootTask::prepare_`, display loop, PlayerMake character creation, the title screen at 1920×1080, and the first-launch tutorial - [RECOMP_BOOT_TO_UI.md](doc/RECOMP_BOOT_TO_UI.md). The tutorial advances past aim/ZR with legible guide text, and the Move page's central 960×540 3D room renders. The tutorial→plaza boundary is under test: an idempotent patch redirects the tutorial's `5 → 6` to warp state 7, and the 21-state UI/page manager's real `4 → 5` handoff loads the Off the Hook news scene (the old table's state-5 entry is null because the transition creates a new page manager). The earlier `4 → 7` detour reached the gear-selection screen and stalled at null state 9; it is a diagnostic, not the plaza path. The plaza café scene and intact NPC faces are verified with the texture-copy fix; free-roaming rendering remains unverified. The news scene and its two hosts render in the central 960×540 viewport. About one boot in three stalls at the character→tutorial UI job transition. |
 
 Everything below is static analysis of the shipped binary unless a section says
 otherwise; runtime findings from the port are labelled as such. Behaviour is only
