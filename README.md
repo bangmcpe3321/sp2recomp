@@ -1,4 +1,4 @@
-# sp2decomp
+# sp2recomp
 
 **English** · [Tiếng Việt](README_vi.md)
 
