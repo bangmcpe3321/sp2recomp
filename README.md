@@ -12,6 +12,21 @@ used to establish it, and how far the port has got.
 
 ## Current state
 
+### False enemy-ink detection fixed - November 23, 2026
+
+Standing on bare tutorial ground no longer triggers the reported enemy-ink
+slowdown in the confirmed manual test. The runtime had returned a report serial
+as a GPU samples-passed count; those fabricated counts fed the player's ink
+coverage. It now records counter resets and publishes real GPU counts with a
+valid completion timestamp.
+
+See [the captured evidence, fix and remaining checks](docs/INVISIBLE_INK_COUNTERS.md),
+the [apply/restore helper](tools/patches/patch-gpu-counter-queries.py), and
+[26 runtime regressions](tools/verify-tutorial-runtime.py). Squid concealment,
+stable story-mode 60 FPS and remaining stutters still need verification. GPU
+timestamp changes are opt-in; the normal build retains the earlier timing.
+
+
 ### Mouse gyro, FPS overlay and stutter follow-up - November 23, 2026
 
 Windows mouse movement now feeds the emulated gyro while holding right mouse or
@@ -26,7 +41,7 @@ normal play. Pipeline keys ignore padding, driver caches persist correctly, and 
 eviction now retains recently used pipelines. Optional per-frame capture records
 compilation costs. **Stable 60 FPS and first-shot/transition
 stalls remain unverified.** See [controls, evidence and patch instructions](docs/FRAME_STUTTER_MOUSE_GYRO.md)
-and [24 runtime checks](tools/verify-tutorial-runtime.py).
+and [26 runtime checks](tools/verify-tutorial-runtime.py).
 
 
 

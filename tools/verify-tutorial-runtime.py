@@ -33,6 +33,8 @@ def main():
         ('test_stall_sampler_optin.py', 'runtime/src/kernel_watch.cpp'),
         ('test_frame_stats_gate.py', 'runtime/src/frame_stats.cpp'),
         ('test_present_pacing_stats.py', 'runtime/src/nvn/nvn_queue.cpp'),
+        ('test_gpu_counter_timestamps.py', 'runtime/src/nvn/nvn_counter_timestamps.h'),
+        ('test_gpu_occlusion_counters.py', 'runtime/src/nvn/nvn_counter_timestamps.h'),
         ('test_pipeline_cache_persistence.py', 'runtime/src/nvn/nvn_pipeline_cache.cpp'),
         ('test_pipeline_lru.py', 'runtime/src/nvn/pipeline_lru.h'),
         ('test_pipeline_key_padding.py', 'runtime/src/nvn/nvn_pipeline.cpp'),

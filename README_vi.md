@@ -1,5 +1,11 @@
 # sp2decomp
 
+> Đã sửa việc bị chậm/kẹt như đứng trên mực địch dù nền hướng dẫn không có mực.
+> Người dùng đã xác nhận hết hiện tượng này. Bộ đếm GPU nay trả số mẫu thực
+> thay vì số thứ tự báo cáo. Xem [bằng chứng và giới hạn](docs/INVISIBLE_INK_COUNTERS.md).
+> Chưa xác nhận việc ẩn mô hình khi bơi trong mực hoặc FPS ổn định ở chế độ cốt truyện.
+
+
 > Cập nhật 23/11/2026: đã thêm ngắm bằng gyro qua chuột trên Windows.
 > Giữ chuột phải hoặc nhấn F1; dùng [ / ] để giảm/tăng độ nhạy, F3 để bật/tắt FPS.
 > Đã giảm độ nhạy mặc định và sửa chiều ngang theo phản hồi thử nghiệm.

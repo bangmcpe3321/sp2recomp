@@ -134,7 +134,7 @@ Rebuild the changed runtime sources, including both `platform_win.cpp` and
 does not track header dependencies. All helpers support `--check` and `--restore`. Restore the motion-stream
 follow-up before mouse gyro, then restore the underlying stutter/overlay patch.
 
-Validation: the Windows LLVM-MinGW build succeeds. The 24 CPU regression groups
+Validation: the Windows LLVM-MinGW build succeeds. The 26 CPU regression groups
 include frame statistics disabled/enabled paths, cache compatibility and failed
 writes, every semantic pipeline-key byte, bounded CSV capture with compile costs,
 overlay counters/stalls, bounded LRU hot-entry retention, collisions and deferred
@@ -145,5 +145,6 @@ the actual Windows six-axis ABI bridge. Patch application, idempotence and
 byte-for-byte restoration were checked in an isolated fixture.
 
 No game assets, translated shaders, executable or private driver cache is included
-in this repository. Manual first-shot and plaza performance verification remains
-open; the available checks establish specific fixes, not complete playability.
+in this repository. The samples-passed counter defect and confirmed false enemy-ink slowdown fix
+are documented [separately](INVISIBLE_INK_COUNTERS.md). Manual first-shot and
+plaza performance verification remains open; the available checks establish specific fixes, not complete playability.

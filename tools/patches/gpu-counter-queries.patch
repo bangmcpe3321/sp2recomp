@@ -1,0 +1,476 @@
+--- a/runtime/src/nvn/nvn_draw_state.cpp
++++ b/runtime/src/nvn/nvn_draw_state.cpp
+@@ -6,6 +6,7 @@
+ 
+ #include "nvn_draw_state.h"
+ #include "platform.h"
++#include "nvn_counter_timestamps.h"
+ 
+ namespace nx::nvn {
+ 
+@@ -118,6 +119,7 @@
+                 }
+             break;
+         }
++        case Cmd::ResetCounter: counter_samples_reset(cb,c.n); break;
+         case Cmd::ReportCounter: {  // {value, timestamp}: the work before it is done when the replay gets here
+             static uint64_t reports = 0, types_seen = 0;
+             if (c.n < 64 && !(types_seen >> c.n & 1)) types_seen |= 1ull << c.n, log("nvn: first counter report of type %u", c.n);
+@@ -125,7 +127,10 @@
+                 // NX_FAKE_GPU_TIME=1: every report of a submit carries the submit's start (a GPU with no cost):
+                 // the game picks its present interval from the timings it measures (bisecting its 30 fps mode).
+                 static const bool fake = std::getenv("NX_FAKE_GPU_TIME") != nullptr;
+-                uint64_t v[2] = {++reports, fake ? submit_start_ns() : plat::monotonic_ns()};
++                if (c.n==1 && counter_samples_report(cb,p)) break;
++                const uint64_t serial=++reports;
++                if (!fake && counter_timestamp_report(cb,c.n,p,serial)) break;
++                uint64_t v[2] = {serial, fake ? submit_start_ns() : plat::monotonic_ns()};
+                 std::memcpy(p, v, sizeof v);
+                 dedup_invalidate(p, sizeof v);
+                 written_cpu_write(p, sizeof v);
+--- a/runtime/src/nvn/nvn_vk.cpp
++++ b/runtime/src/nvn/nvn_vk.cpp
+@@ -34,6 +34,10 @@
+ namespace nx::nvn {
+ 
+ using namespace nx::vk;
++void counter_queries_discard(VkCommandBuffer cb);
++void counter_queries_collect(VkCommandBuffer cb,const std::vector<WriteBack>* pending_write_backs=nullptr);
++bool counter_queries_pending(VkCommandBuffer cb);
++
+ void pipeline_compile_totals(uint64_t& count, uint64_t& ns);
+ 
+ 
+@@ -599,7 +603,9 @@
+     p_vkResetCommandBuffer(g_cb, 0);
+     VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+     bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+-    return check(p_vkBeginCommandBuffer(g_cb, &bi), "vkBeginCommandBuffer");
++    const bool ok=check(p_vkBeginCommandBuffer(g_cb,&bi),"vkBeginCommandBuffer");
++    if (ok) counter_queries_discard(g_cb);
++    return ok;
+ }
+ 
+ // Where the submitting thread's time goes, logged with the draw stats, per presented frame: the replay (recording
+@@ -639,7 +645,7 @@
+             log("nvn/vk: submit fence waited %.1f ms (encode %.1f ms, wait %s signal %s)", double(waited) / 1e6,
+                 double(t1 - t0) / 1e6, wait ? "set" : "none", signal ? "set" : "none");
+         if (w == VK_TIMEOUT) gpu_hung("a submit did not finish in 2 s");
+-        check(w, "vkWaitForFences");
++        if (check(w,"vkWaitForFences")) counter_queries_collect(g_cb);
+     }
+     frame_times().encode_ns += t1 - t0, frame_times().fence_ns += plat::monotonic_ns() - t1;
+ }
+--- a/runtime/src/nvn/nvn_frames.cpp
++++ b/runtime/src/nvn/nvn_frames.cpp
+@@ -46,6 +46,10 @@
+ namespace nx::nvn {
+ 
+ using namespace nx::vk;
++void counter_queries_discard(VkCommandBuffer cb);
++void counter_queries_collect(VkCommandBuffer cb,const std::vector<WriteBack>* pending_write_backs=nullptr);
++bool counter_queries_pending(VkCommandBuffer cb);
++
+ 
+ VkQueue vk_queue();                // nvn_vk.cpp
+ std::recursive_mutex& gpu_lock();  // nvn_vk.cpp
+@@ -187,6 +191,10 @@
+     if (!s) return false;
+     VkFence fences[kMaxParts];
+     wait_fences(fences, queued_fences(*s, kMaxParts, fences));
++    for (uint32_t part=0;part<=s->part && part<kMaxParts;part++) {
++        if (s->queued>>part&1) counter_queries_collect(s->cbs[part],&s->write_backs);
++        else counter_queries_discard(s->cbs[part]);
++    }
+     gpu_busy_retired(uint32_t(s - g_slots), s->queued);  // NX_GPU_PROFILE=3
+     apply_write_backs(*s);
+     // Its command and descriptor pools: reset on the janitor thread (PHASE4.md C2b), or here (NX_JANITOR=0).
+@@ -223,6 +231,7 @@
+ }
+ 
+ bool begin_part(VkCommandBuffer cb) {
++    counter_queries_discard(cb);
+     if (!g_slot_pools) p_vkResetCommandBuffer(cb, 0);
+     VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+     bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+@@ -470,7 +479,14 @@
+     if (s.ok) gpu_busy_part_end(uint32_t(&s - g_slots), s.part, s.cbs[s.part]);
+     const bool has_last = s.ok && submit_part(s.cbs[s.part], s.fences[s.part], wait, signal);
+     if (has_last) s.queued |= 1u << s.part;
+-    if (!s.queued) return;  // nothing ran: no results to copy back, the slot stays free
++    if (!s.queued) {
++        for (uint32_t part=0;part<=s.part && part<kMaxParts;part++) counter_queries_discard(s.cbs[part]);
++        return; // nothing ran: no counter or compute results may be published
++    }
++    // Timestamp reports are guest-visible results too. They may occur after the
++    // compute split, so only the entire submitted command sequence is sufficient.
++    for (uint32_t part=0;part<=s.part && part<kMaxParts;part++)
++        if ((s.queued>>part&1) && counter_queries_pending(s.cbs[part])) wait_done=true;
+     s.serial = ++g_submitted;
+     s.ring_end = g_head;
+     s.write_backs = std::move(write_backs);
+--- a/runtime/src/nvn/nvn_draw.cpp
++++ b/runtime/src/nvn/nvn_draw.cpp
+@@ -22,6 +22,10 @@
+ namespace nx::nvn {
+ 
+ using namespace nx::vk;
++void counter_occlusion_prepare(VkCommandBuffer cb);
++void counter_occlusion_begin_pass(VkCommandBuffer cb);
++void counter_occlusion_end_pass(VkCommandBuffer cb);
++bool counter_occlusion_pass_active(VkCommandBuffer cb);
+ 
+ // The replay state shared with nvn_draw_trace.cpp (nvn_draw_state.h).
+ namespace replay {
+@@ -432,6 +436,7 @@
+         if (g_frame.load() == snap_frame && t.color_count && t.colors[0])
+             if (GpuImage* snap = image_of(t.colors[0])) debug_snapshot(cb, *snap, g_stats.done);
+     }
++    counter_occlusion_prepare(cb); // query reset is outside either kind of render pass
+     g_render_pass = render_pass_objects();
+     if (g_render_pass)
+         begin_render_pass(cb, t.color_count, formats, colors, dimg ? dimg->format : VK_FORMAT_UNDEFINED, depth, stencil,
+@@ -439,6 +444,7 @@
+     else
+         p_vkCmdBeginRendering(cb, &ri);
+     g_rendering = true;
++    counter_occlusion_begin_pass(cb);
+     g_pass_written = cleared | fresh;  // as a clear inside the pass: sampling it needs it stored first
+     trace_pass("begin: cleared, fresh", t, cleared, fresh);
+     trace_depth_desc(t);
+@@ -878,7 +884,7 @@
+         if (zero_detail)
+             zero_label += " count=" + std::to_string(c.i[0]) + " first=" + std::to_string(c.i[1]) +
+                           " inst=" + std::to_string(c.i[3]) + (indexed ? " idx" : " arr");
+-        bool q = zero_draws_on() && zero_draws_begin(cb, zero_label);
++        bool q = zero_draws_on() && !counter_occlusion_pass_active(cb) && zero_draws_begin(cb, zero_label);
+         for (uint32_t at = 0; at < instances; at += chunk)
+             p_vkCmdDrawIndexed(cb, count, std::min(chunk, instances - at), 0, c.i[1], uint32_t(c.i[2]) + at);
+         if (q) zero_draws_end(cb);
+@@ -889,7 +895,7 @@
+         if (zero_detail)
+             zero_label += " count=" + std::to_string(c.i[0]) + " first=" + std::to_string(c.i[1]) +
+                           " inst=" + std::to_string(c.i[3]) + (indexed ? " idx" : " arr");
+-        bool q = zero_draws_on() && zero_draws_begin(cb, zero_label);
++        bool q = zero_draws_on() && !counter_occlusion_pass_active(cb) && zero_draws_begin(cb, zero_label);
+         for (uint32_t at = 0; at < instances; at += chunk)
+             p_vkCmdDraw(cb, uint32_t(c.i[1]), std::min(chunk, instances - at), uint32_t(c.i[0]), uint32_t(c.i[2]) + at);
+         if (q) zero_draws_end(cb);
+@@ -1049,6 +1055,7 @@
+ void pass_end_only(VkCommandBuffer cb, int reason) {
+     if (!g_rendering) return;
+     g_pass_ends[reason & 7]++, trace_pass("end: reason", g_pass, uint32_t(reason), 0);
++    counter_occlusion_end_pass(cb);
+     if (g_render_pass)
+         p_vkCmdEndRenderPass(cb);
+     else
+--- a/runtime/src/nvn/nvn_state.cpp
++++ b/runtime/src/nvn/nvn_state.cpp
+@@ -280,6 +280,9 @@
+ // ReportCounter(cmd, NVNcounterType, NVNbufferAddress): the GPU writes {u64 value, u64 timestamp} there when it gets
+ // to this point. Engines read these to know how far the GPU is (Wonder skips drawing the scene when they never
+ // arrive), so the replay writes them.
++void ResetCounter(CPU& c) {
++    Cmd cmd{Cmd::ResetCounter};cmd.n=uint32_t(c.x[1]);record(c.x[0],cmd);
++}
+ void ReportCounter(CPU& c) {
+     Cmd cmd{Cmd::ReportCounter};
+     cmd.n = uint32_t(c.x[1]);
+@@ -321,6 +324,7 @@
+ NX_HLE("nvnCommandBufferDrawElementsInstanced", DrawElementsInstanced);
+ NX_HLE("nvnCommandBufferBarrier", ignore);
+ NX_HLE("nvnCommandBufferReportCounter", ReportCounter);
++NX_HLE("nvnCommandBufferResetCounter", ResetCounter);
+ NX_HLE("nvnDeviceGetTimestampInNanoseconds", GetTimestampInNanoseconds);
+ NX_HLE("nvnDeviceGetCurrentTimestampInNanoseconds", GetCurrentTimestampInNanoseconds);  // every replayed command is serialized for now
+ 
+--- a/runtime/src/nvn/nvn.h
++++ b/runtime/src/nvn/nvn.h
+@@ -415,6 +415,7 @@
+         SetStencilRef, SetStencilMask, SetStencilValueMask, SetPolygonOffsetClamp, SetDepthBounds, SetDepthClamp,
+         BindDeferred,  // mask: 0 textures, 1 images, 2 uniform buffers, 3 storage buffers; a[0] the guest array
+         BindMultisampleState,  // n: alpha to coverage enabled (nvn_state.cpp)
++        ResetCounter, // appended: preserve all existing recorded command values/layout
+     } op;
+     uint32_t n = 0, mask = 0;
+     uint64_t a[9] = {};  // textures (render targets: colors then depth), handles, GPU addresses, sizes, ...
+--- /dev/null
++++ b/runtime/src/nvn/nvn_counter_timestamps.h
+@@ -0,0 +1,277 @@
++// NVN timestamp reports execute on the GPU; CPU replay time is not GPU work.
++// Included once by nvn_draw_state.cpp. Calls are serialized by the existing GPU lock.
++#pragma once
++#include <cmath>
++#include <map>
++#include <vector>
++#include "nvn_vk.h"
++#include "platform.h"
++namespace nx::nvn {
++using namespace nx::vk;
++uint32_t vk_queue_family();
++namespace {
++constexpr uint32_t kCounterQueries=4096;
++struct CounterDestination { uint8_t* destination; uint64_t value; bool publish=true; };
++constexpr uint32_t kOcclusionQueries=8192;
++struct SamplesOperation {
++    enum Kind { Reset, Segment, Report } kind;
++    uint32_t index=0;
++};
++struct SamplesDestination { uint8_t* destination; uint32_t timestamp_report; uint64_t value=0; bool valid=false; };
++struct CounterBatch {
++    VkQueryPool pool=VK_NULL_HANDLE, samples_pool=VK_NULL_HANDLE;
++    std::vector<CounterDestination> reports;
++    std::vector<SamplesOperation> samples_operations;
++    std::vector<SamplesDestination> samples_destinations;
++    uint32_t samples_queries=0;
++    int samples_open=-1;
++    bool samples_prepared=false;
++};
++std::map<VkCommandBuffer,CounterBatch> g_counter_batches;
++// Recording state determines which passes need a query. Completed state is updated
++// in GPU submission order, including resets/reports in different command buffers.
++bool g_samples_recording=false, g_samples_valid=true;
++uint64_t g_samples_total=0;
++bool occlusion_counters_supported() {
++    static const bool supported=[] {
++        if (const char* e=std::getenv("NX_OCCLUSION_COUNTERS");e && std::atoi(e)==0) return false;
++        // Approximate occlusion queries may return only a nonzero indicator. Ink
++        // coverage needs the exact number of passed samples, not that indicator.
++        const bool precise=vk_features().occlusionQueryPrecise;
++        if (!precise) log("nvn/vk: precise occlusion queries unsupported; sample counter reports left unchanged");
++        return precise;
++    }();
++    return supported;
++}
++bool counter_destination_overlaps(uint8_t* destination,const std::vector<WriteBack>* writes) {
++    bool overlaps=replay::written_overlaps(destination,16);
++    if (writes) for (const WriteBack& write:*writes) {
++        const uintptr_t a=reinterpret_cast<uintptr_t>(destination), b=reinterpret_cast<uintptr_t>(write.to);
++        overlaps|=a>=b ? a-b<write.size : b-a<16;
++    }
++    if (overlaps) {
++        static unsigned warnings=0;
++        if (warnings++<4) log("nvn/vk: GPU counter overlaps compute write-back; retaining compute result (ordered counter/SSBO aliases unsupported)");
++    }
++    return overlaps;
++}
++// Align the GPU epoch once to the host clock. Keeping this offset fixed preserves
++// GPU durations across submits; aligning every batch separately would restore CPU jitter.
++struct CounterClock {
++    long double period=1, gpu_anchor=0, host_anchor=0;
++    uint32_t bits=64;
++    bool anchored=false;
++    long double unwrap(uint64_t ticks,uint64_t host_now) const {
++        if (bits>=64) return static_cast<long double>(ticks);
++        const uint64_t mask=(uint64_t(1)<<bits)-1;
++        const long double span=std::ldexp(1.0L,int(bits));
++        long double raw=static_cast<long double>(ticks&mask);
++        if (!anchored) return raw;
++        // Closest epoch to the advancing clock also handles wraps while no reports were queued.
++        const long double expected=gpu_anchor+(static_cast<long double>(host_now)-host_anchor)/period;
++        return raw+std::round((expected-raw)/span)*span;
++    }
++    void anchor(uint64_t latest_ticks,uint64_t host_now) {
++        if (anchored) return;
++        gpu_anchor=unwrap(latest_ticks,host_now);host_anchor=static_cast<long double>(host_now);anchored=true;
++    }
++    uint64_t nanoseconds(uint64_t ticks,uint64_t host_now) const {
++        const long double value=host_anchor+(unwrap(ticks,host_now)-gpu_anchor)*period;
++        if (value<=0) return 0;
++        if (value>=static_cast<long double>(UINT64_MAX)) return UINT64_MAX;
++        return uint64_t(value);
++    }
++} g_counter_clock;
++bool gpu_counters_supported() {
++    static const bool supported=[] {
++        // Experimental GPU timing is opt-in until game pacing is independently
++        // verified. Real sample counts remain enabled regardless of this setting.
++        // The explicit timestamp switch takes precedence over the legacy alias.
++        const char* enabled=std::getenv("NX_GPU_TIMESTAMPS");
++        if (!enabled) enabled=std::getenv("NX_GPU_COUNTERS");
++        if (!enabled || std::atoi(enabled)==0) return false;
++        VkPhysicalDeviceProperties properties{};
++        p_vkGetPhysicalDeviceProperties(vk_physical(),&properties);
++        uint32_t count=0;p_vkGetPhysicalDeviceQueueFamilyProperties(vk_physical(),&count,nullptr);
++        std::vector<VkQueueFamilyProperties> families(count);
++        if (count) p_vkGetPhysicalDeviceQueueFamilyProperties(vk_physical(),&count,families.data());
++        const uint32_t family=vk_queue_family();
++        if (family>=count || !families[family].timestampValidBits || !(properties.limits.timestampPeriod>0)) return false;
++        g_counter_clock.period=properties.limits.timestampPeriod;
++        g_counter_clock.bits=families[family].timestampValidBits;
++        log("nvn/vk: GPU counter timestamps enabled (period %.3f ns, %u valid bits)",double(g_counter_clock.period),g_counter_clock.bits);
++        return true;
++    }();
++    return supported;
++}
++} // namespace
++// Call only when a command buffer is free to begin again. A failed/unsubmitted
++// buffer must not leave destinations to be published after a later submission.
++void counter_queries_discard(VkCommandBuffer cb) {
++    auto found=g_counter_batches.find(cb);
++    if (found!=g_counter_batches.end()) {
++        auto& batch=found->second;
++        batch.reports.clear();batch.samples_operations.clear();batch.samples_destinations.clear();
++        batch.samples_queries=0;batch.samples_open=-1;batch.samples_prepared=false;
++    }
++}
++bool counter_queries_pending(VkCommandBuffer cb) {
++    auto found=g_counter_batches.find(cb);
++    return found!=g_counter_batches.end() && (!found->second.reports.empty() || !found->second.samples_operations.empty());
++}
++bool counter_timestamp_report(VkCommandBuffer cb,uint32_t type,uint8_t* destination,uint64_t value) {
++    if ((type!=0 && type!=16) || !gpu_counters_supported()) return false;
++    auto& batch=g_counter_batches[cb];
++    if (!batch.pool) {
++        VkQueryPoolCreateInfo info{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
++        info.queryType=VK_QUERY_TYPE_TIMESTAMP;info.queryCount=kCounterQueries;
++        if (p_vkCreateQueryPool(vk_device(),&info,nullptr,&batch.pool)!=VK_SUCCESS) {
++            batch.pool=VK_NULL_HANDLE;
++            return false;
++        }
++    }
++    if (batch.reports.size()>=kCounterQueries) {
++        static bool warned=false;
++        if (!warned) log("nvn/vk: too many GPU counter reports in one command buffer; excess reports left unchanged"),warned=true;
++        return true;
++    }
++    if (batch.reports.empty()) {
++        // vkCmdResetQueryPool must be outside a render pass. Existing draw state
++        // reopens the pass with its contents retained if another draw follows.
++        draw_end_rendering(cb);
++        p_vkCmdResetQueryPool(cb,batch.pool,0,kCounterQueries);
++    }
++    const uint32_t query=uint32_t(batch.reports.size());
++    p_vkCmdWriteTimestamp(cb,type==16?VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT:VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,batch.pool,query);
++    batch.reports.push_back({destination,value});
++    return true;
++}
++// Prepare outside rendering, then begin/end a query around each render-pass
++// segment. A reset/report closes the current pass first; another draw reopens it
++// with retained attachments. This avoids per-draw query overhead and query nesting.
++void counter_occlusion_prepare(VkCommandBuffer cb) {
++    if (!g_samples_recording || !occlusion_counters_supported()) return;
++    auto& batch=g_counter_batches[cb];
++    if (batch.samples_prepared) return;
++    if (!batch.samples_pool) {
++        VkQueryPoolCreateInfo info{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
++        info.queryType=VK_QUERY_TYPE_OCCLUSION;info.queryCount=kOcclusionQueries;
++        if (p_vkCreateQueryPool(vk_device(),&info,nullptr,&batch.samples_pool)!=VK_SUCCESS) {
++            batch.samples_pool=VK_NULL_HANDLE;return;
++        }
++    }
++    p_vkCmdResetQueryPool(cb,batch.samples_pool,0,kOcclusionQueries);
++    batch.samples_prepared=true;
++}
++void counter_occlusion_begin_pass(VkCommandBuffer cb) {
++    if (!g_samples_recording || !occlusion_counters_supported()) return;
++    auto& batch=g_counter_batches[cb];
++    if (!batch.samples_prepared || batch.samples_queries>=kOcclusionQueries) {
++        // Failed allocation/overflow invalidates this accumulation until a reset,
++        // instead of substituting guessed positive or zero coverage.
++        batch.samples_operations.push_back({SamplesOperation::Segment,UINT32_MAX});
++        static unsigned warnings=0;
++        if (warnings++<4) log("nvn/vk: occlusion query unavailable or exhausted; affected sample reports left unchanged");
++        return;
++    }
++    const uint32_t query=batch.samples_queries++;
++    p_vkCmdBeginQuery(cb,batch.samples_pool,query,VK_QUERY_CONTROL_PRECISE_BIT);
++    batch.samples_open=int(query);
++    batch.samples_operations.push_back({SamplesOperation::Segment,query});
++}
++void counter_occlusion_end_pass(VkCommandBuffer cb) {
++    auto found=g_counter_batches.find(cb);
++    if (found==g_counter_batches.end() || found->second.samples_open<0) return;
++    auto& batch=found->second;
++    p_vkCmdEndQuery(cb,batch.samples_pool,uint32_t(batch.samples_open));
++    batch.samples_open=-1;
++}
++bool counter_occlusion_pass_active(VkCommandBuffer cb) {
++    auto found=g_counter_batches.find(cb);
++    return found!=g_counter_batches.end() && found->second.samples_open>=0;
++}
++void counter_samples_reset(VkCommandBuffer cb,uint32_t type) {
++    if (type!=1) return;
++    draw_end_rendering(cb); // ends any prior query before changing the counter scope
++    g_samples_recording=occlusion_counters_supported();
++    if (!g_samples_recording) return;
++    auto& batch=g_counter_batches[cb];
++    batch.samples_operations.push_back({SamplesOperation::Reset});
++    counter_occlusion_prepare(cb);
++}
++bool counter_samples_report(VkCommandBuffer cb,uint8_t* destination) {
++    if (!g_samples_recording || !occlusion_counters_supported()) {
++        static unsigned warnings=0;
++        if (warnings++<4) log("nvn/vk: sample counter reported without a supported reset scope; destination left unchanged");
++        return true;
++    }
++    draw_end_rendering(cb); // completes this query segment before the report marker
++    auto& batch=g_counter_batches[cb];
++    const size_t before=batch.reports.size();
++    const bool timestamp=counter_timestamp_report(cb,0,destination,0) && batch.reports.size()>before;
++    const uint32_t report=uint32_t(batch.samples_destinations.size());
++    batch.samples_destinations.push_back({destination,timestamp?uint32_t(before):UINT32_MAX});
++    batch.samples_operations.push_back({SamplesOperation::Report,report});
++    return true;
++}
++
++// The caller has waited the command buffer's actual fence. No WAIT_BIT, spin,
++// per-report submit or extra fence is introduced; failure publishes no invented time.
++void counter_queries_collect(VkCommandBuffer cb,const std::vector<WriteBack>* pending_write_backs=nullptr) {
++    auto found=g_counter_batches.find(cb);
++    if (found==g_counter_batches.end()) return;
++    auto& batch=found->second;
++    if (batch.reports.empty() && batch.samples_operations.empty()) return;
++    std::vector<uint64_t> samples(batch.samples_queries);
++    const bool samples_ok=samples.empty() || p_vkGetQueryPoolResults(vk_device(),batch.samples_pool,0,uint32_t(samples.size()),samples.size()*sizeof(uint64_t),samples.data(),sizeof(uint64_t),VK_QUERY_RESULT_64_BIT)==VK_SUCCESS;
++    for (const SamplesOperation& operation:batch.samples_operations) {
++        if (operation.kind==SamplesOperation::Reset) { g_samples_total=0;g_samples_valid=true; }
++        else if (operation.kind==SamplesOperation::Segment) {
++            if (!samples_ok || operation.index>=samples.size()) g_samples_valid=false;
++            else g_samples_total+=samples[operation.index];
++        } else {
++            auto& report=batch.samples_destinations[operation.index];
++            report.value=g_samples_total;report.valid=g_samples_valid;
++            if (report.timestamp_report!=UINT32_MAX) {
++                auto& timestamp=batch.reports[report.timestamp_report];
++                timestamp.value=report.value;timestamp.publish=report.valid;
++            } else if (report.valid && !counter_destination_overlaps(report.destination,pending_write_backs)) {
++                // QueryInfoBuffer also uses the timestamp as its ready marker.
++                // In legacy timestamp mode publish completion time only after the
++                // GPU fence, including a legitimate zero samples-passed result.
++                const uint64_t completed[2]={report.value,plat::monotonic_ns()};
++                std::memcpy(report.destination,completed,sizeof completed);
++                replay::dedup_invalidate(report.destination,sizeof completed);
++            }
++        }
++    }
++    batch.samples_operations.clear();
++    std::vector<uint64_t> ticks(batch.reports.size());
++    const VkResult result=ticks.empty()?VK_SUCCESS:p_vkGetQueryPoolResults(vk_device(),batch.pool,0,uint32_t(ticks.size()),ticks.size()*sizeof(uint64_t),ticks.data(),sizeof(uint64_t),VK_QUERY_RESULT_64_BIT);
++    if (result==VK_SUCCESS) {
++        const uint64_t now=plat::monotonic_ns();
++        // First alignment uses the last completed marker, minimizing retirement delay.
++        if (!ticks.empty()) g_counter_clock.anchor(ticks.back(),now);
++        for (size_t k=0;k<ticks.size();k++) {
++            uint8_t* destination=batch.reports[k].destination;
++            if (!batch.reports[k].publish || counter_destination_overlaps(destination,pending_write_backs)) continue;
++            const uint64_t counter[2]={batch.reports[k].value,g_counter_clock.nanoseconds(ticks[k],now)};
++            std::memcpy(batch.reports[k].destination,counter,sizeof counter);
++            replay::dedup_invalidate(batch.reports[k].destination,sizeof counter);
++            replay::written_cpu_write(batch.reports[k].destination,sizeof counter);
++        }
++    } else {
++        static unsigned warnings=0;
++        if (warnings++<4) log("nvn/vk: completed GPU timestamp query unavailable (%d); timestamp left unchanged",int(result));
++        // A failed timestamp query must not discard an independently completed,
++        // valid samples-passed result. A nonzero completion time marks it ready.
++        for (const auto& report:batch.samples_destinations)
++            if (report.valid && report.timestamp_report!=UINT32_MAX && !counter_destination_overlaps(report.destination,pending_write_backs)) {
++                const uint64_t completed[2]={report.value,plat::monotonic_ns()};
++                std::memcpy(report.destination,completed,sizeof completed);
++                replay::dedup_invalidate(report.destination,sizeof completed);
++            }
++    }
++    batch.samples_destinations.clear();batch.reports.clear();
++}
++} // namespace nx::nvn
