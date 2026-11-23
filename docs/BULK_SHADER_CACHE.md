@@ -55,6 +55,14 @@ results. Game-derived code, shader files and captures are not distributed here.
 The existing public [captured-miss workflow](../tools/wsl/wsl-translate-shaders.sh)
 remains available for later runtime-only variants.
 
+The standard captured-miss translator was also patched and rebuilt to recognize
+headerless compute binaries and all SPH stage types. Apply the generic source
+helper with `python3 tools/wsl/wsl-patch-shader-stage-detection.py "$HOME/sp2port"`,
+then rebuild the external harness. `tools/wsl/verify_spirv_stage.py` independently
+checks the generated execution model. A real-harness regression translated all
+15 headerless compute cases plus vertex, fragment and geometry controls: all 18
+passed Vulkan 1.2 validation with the expected stage; input bytes were unchanged.
+
 Restart the game after cache changes: missing-shader records are process-cached.
 The normal executable and simulation timing were unchanged for the cache retest.
 
