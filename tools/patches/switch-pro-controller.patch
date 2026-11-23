@@ -285,7 +285,7 @@
 +} // namespace nx::plat
 --- /dev/null
 +++ b/runtime/src/controller_motion.h
-@@ -0,0 +1,130 @@
+@@ -0,0 +1,133 @@
 +// SDL physical motion -> coherent, timestamp-driven 200 Hz nn::hid samples.
 +#pragma once
 +#include "mouse_gyro.h"
@@ -362,6 +362,9 @@
 +    void push_gyro(uint64_t timestamp_ns,const float* values) {
 +        if(!finite(values)||(started_&&timestamp_ns<=last_))return;
 +        double raw[3];map(values,raw);
++        // Match the game camera horizontal direction; apply before quaternion
++        // integration so rate, angle and orientation remain one coherent stream.
++        raw[2]=-raw[2];
 +        const double speed=std::hypot(raw[0],raw[1],raw[2]);
 +        if(speed>100)return;
 +        const bool gap=started_&&timestamp_ns-last_>max_gap_ns;

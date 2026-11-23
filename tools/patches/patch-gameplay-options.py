@@ -10,10 +10,12 @@ from pathlib import Path
 
 BUILD_ID = bytes.fromhex('F18FF3CFCBAD0884D72ABBEB6C540D6B' + '00' * 16)
 INCLUDE = b'#include "sp2_gameplay_options.h" // PATCH-SP2-GAMEPLAY-OPTIONS\n'
+ORIGINAL_BRANCH = b'    if (!c.zf) goto L_51C5C; // b.ne #0x51c5c\n'
+LEGACY_BRANCH = b'    if (nx::sp2::plaza_60fps_enabled() || !c.zf) goto L_51C5C; // PATCH-SP2-PLAZA-60FPS: b #0x51c5c\n'
 SITES = (
-    ('gen/main/code_006.cpp', 0x51C2C, bytes.fromhex('81010054'),
-     b'    if (!c.zf) goto L_51C5C; // b.ne #0x51c5c\n',
-     b'    if (nx::sp2::plaza_60fps_enabled() || !c.zf) goto L_51C5C; // PATCH-SP2-PLAZA-60FPS: b #0x51c5c\n'),
+    ('gen/main/code_006.cpp', 0x51C54, bytes.fromhex('e1031f32'),
+     b'    c.x[1] = uint32_t(0x2ull); // mov w1, #2\n    c.x[30] = NXB + 0x51c5cull; main_00E67D58(c); // bl #0xe67d58\n',
+     b'    c.x[1] = nx::sp2::plaza_60fps_enabled() ? 1u : 2u; // PATCH-SP2-PLAZA-60FPS: retain renderer setup, change vblank interval\n    c.x[30] = NXB + 0x51c5cull; main_00E67D58(c); // bl #0xe67d58\n'),
     ('gen/main/code_348.cpp', 0x1021FAC, bytes.fromhex('768f0f94'),
      b'    c.x[30] = NXB + 0x1021fb0ull; main_01405D84(c); // bl #0x1405d84\n',
      b'    if (!nx::sp2::dynamic_resolution_disabled()) { c.x[30] = NXB + 0x1021fb0ull; main_01405D84(c); } // PATCH-SP2-DYNAMIC-RESOLUTION: nop\n'),
@@ -39,6 +41,9 @@ def main():
             if nso_header[:4] != b'NSO0' or nso_header[0x40:0x60] != BUILD_ID:
                 raise ValueError('NSO build ID mismatch')
             with (root / 'private/analysis/main.bin').open('rb') as f:
+                f.seek(0x51C2C)
+                if f.read(4) != bytes.fromhex('81010054'):
+                    raise ValueError('Original scene branch mismatch at 0x51c2c')
                 for _, address, instruction, _, _ in SITES:
                     f.seek(address)
                     if f.read(4) != instruction:
@@ -48,6 +53,15 @@ def main():
         for relative, _, _, old, new in SITES:
             path = root / relative
             data = path.read_bytes()
+            if relative == SITES[0][0]:
+                if data.count(LEGACY_BRANCH) == 1 and ORIGINAL_BRANCH not in data and data.count(old) == 1 and data.count(INCLUDE) == 1:
+                    states.append(True)
+                    result = data.replace(LEGACY_BRANCH, ORIGINAL_BRANCH, 1)
+                    result = result.replace(INCLUDE, b'', 1) if args.restore else result.replace(old, new, 1)
+                    changes.append((path, result))
+                    continue
+                if data.count(ORIGINAL_BRANCH) != 1 or LEGACY_BRANCH in data:
+                    raise ValueError('Scene branch mismatch; no files changed')
             if data.count(old) == 1 and new not in data and INCLUDE not in data:
                 states.append(False)
                 result = INCLUDE + data.replace(old, new, 1)

@@ -67,12 +67,13 @@ int main(){
  for(int i=0;i<500;i++,time+=5*ms){m.push_accel(time,flat);m.push_gyro(time,bias);}
  s=latest(m);assert(near(s.angle[0],0)&&near(s.angle[1],0)&&near(s.angle[2],0));
  assert(near(s.direction[0],1));
- // Independent yaw axis checks SDL +Y becomes HID -Z, while SDL +Z ->HID +Y.
+ // Horizontal camera mapping: SDL +Y becomes HID +Z; vertical/pitch and
+ // SDL +Z -> HID +Y retain their existing direction.
  for(int axis=1;axis<3;axis++){
   m.reset();float rate[3]={};rate[axis]=pi/2;
   m.push_accel(ms,flat);m.push_gyro(ms,rate);
   for(int i=1;i<=200;i++)m.push_gyro(ms+i*5*ms,rate);
-  s=latest(m);valid(s);assert(near(s.angle[axis==1?2:1],axis==1?-.25:.25));
+  s=latest(m);valid(s);assert(near(s.angle[axis==1?2:1],.25));
  }
  // Starting while moving cancels calibration; later gentle aiming stays live.
  m.reset();m.push_accel(ms,flat);m.push_gyro(ms,pitch);
