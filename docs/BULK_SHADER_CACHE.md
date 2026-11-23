@@ -21,10 +21,18 @@ This is an offline shader-stage build, not a complete graphics-pipeline cache.
   extracted stages or any of the **199 shader misses** from the affected
   story-mode run.
 
-Headerless compute stages retain their original bytes and hashes. Their stage
-is inferred only from the verified container/control metadata. A representative
-headerless compute stage was translated and validated separately; the extracted
-headerless stages were already present in the cache.
+The deeper execution-model audit also found **15 pre-existing headerless
+compute shaders cached incorrectly as vertex shaders**. Their original bytes
+and hashes were retained; the corrected translator uses verified container and
+control metadata. All 15 were recompiled as compute, validated, and replaced
+with matching metadata. The prior files and complete metadata were backed up.
+Thus this run translated 7,214 new stages plus 15 validated repairs (7,229 total).
+
+The final audit checks every extracted stage's execution model and resource
+metadata, not just file existence: all 14,379 passed, with zero audit errors.
+The asset stage types are 4,801 vertex, 9,555 fragment, 15 compute and eight
+geometry. The cache contains 14,415 files with corresponding metadata; 36 entries
+outside the current extracted asset set were preserved.
 
 Two apparent BAHS parse failures were incidental byte strings inside model
 floating-point data: unaligned headers, implausible version and out-of-file size.

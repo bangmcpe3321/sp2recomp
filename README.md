@@ -16,7 +16,8 @@ used to establish it, and how far the port has got.
 
 The local cache now covers all **14,379 shader stages extracted from the game
 assets**, including all 199 misses from the affected story-mode run. The batch
-compiled and validated 7,214 new stages while preserving existing cache entries.
+compiled and validated 7,214 new stages and repaired 15 older compute stages
+that had been incorrectly cached as vertex shaders.
 See [counts, verification and limitations](docs/BULK_SHADER_CACHE.md). Black
 materials and post-stage ink behavior are awaiting manual retest; this does not
 precompile every Vulkan pipeline or establish stable 60 FPS.
