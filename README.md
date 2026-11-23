@@ -12,6 +12,16 @@ used to establish it, and how far the port has got.
 
 ## Current state
 
+### Bulk shader-cache build - November 24, 2026
+
+The local cache now covers all **14,379 shader stages extracted from the game
+assets**, including all 199 misses from the affected story-mode run. The batch
+compiled and validated 7,214 new stages while preserving existing cache entries.
+See [counts, verification and limitations](docs/BULK_SHADER_CACHE.md). Black
+materials and post-stage ink behavior are awaiting manual retest; this does not
+precompile every Vulkan pipeline or establish stable 60 FPS.
+
+
 ### Plaza transition safety follow-up - November 23, 2026
 
 A missing font fallback no longer causes the observed null glyph read. Resource

@@ -96,6 +96,12 @@ int main(int argc,char**argv){
  counter_samples_report(8,(uint8_t*)b);finish(8);assert(b[0]==29);
  // Reusing a retired command buffer resets query storage, but preserves the old NVN value until reset.
  counter_queries_discard(1);counter_samples_reset(1,1);beginpass(1);draw(11);counter_samples_report(1,(uint8_t*)b);finish(1);assert(b[0]==11);
+ // A scene transition does not clear the global NVN counter by itself. The next
+ // explicit ResetCounter must erase all old scene draws, including one open pass.
+ counter_queries_discard(12);beginpass(12);draw(1000000);draw_end_rendering(12);finish(12);
+ counter_queries_discard(13);beginpass(13);draw(2000000);counter_samples_reset(13,1);
+ beginpass(13);draw(0);counter_samples_report(13,(uint8_t*)a);finish(13);assert(a[0]==0&&a[1]!=0);
+ counter_queries_discard(13);counter_samples_reset(13,1);counter_samples_report(13,(uint8_t*)a);finish(13);assert(a[0]==0);
  assert(!in_pass);for(auto [cb,open]:opened)assert(!open.pool);
  puts("PASS precise sample counters: ResetCounter ABI/HLE, per-pass scopes, prefix/cross-submit counts, zero coverage, fence-only publication, failure/exhaustion and legal query lifetimes");
 }
