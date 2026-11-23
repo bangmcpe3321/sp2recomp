@@ -16,17 +16,21 @@ the addresses below are the corresponding flat-image/code offsets.
 
 | Option | Original instruction | Replacement | Generated implementation |
 | --- | --- | --- | --- |
-| `NX_PLAZA_60FPS=1` | `0x51C2C`: `81010054`, `b.ne +0x30` | Reference patch: `0C000014`, `b +0x30` | Retain the original branch and renderer-state update; at `0x51C54`, pass interval 1 instead of 2 to the original setter for mode 3. |
+| `NX_PLAZA_60FPS=1` | `0x51C2C`: `81010054`, `b.ne +0x30` | Reference patch: `0C000014`, `b +0x30` | Execute the scene setup and interval setter; select full-rate calculation with interval 1 instead of half-rate calculation with interval 2 for mode 3. |
 | `NX_DISABLE_DYNAMIC_RESOLUTION=1` | `0x1021FAC`: `768F0F94`, `bl agl::fctr::GPUStressChecker::calc` | `1F2003D5`, `nop` | Skip this GPU stress/scaling update call in `gsys::SystemTask::invokeCalcFrame_`, preserving the guest LR. |
 
 The first implementation copied the branch patch literally. User-assisted A/B
 tests found that the entire 3D news studio disappeared with plaza 60 FPS enabled,
 while the control and fixed-resolution-only runs showed it correctly. The skipped
-block also sets bit 0 at `gsys::SystemTask + 0x550`. The revised implementation
-retains that renderer setup and changes only the argument to
-`setVBlankWaitInterval`, from 2 to 1. It therefore requests 60 Hz through the game's
-existing setter without discarding scene initialization. The helper also upgrades
-the earlier branch-skipping installation safely.
+block sets bit 0 at `gsys::SystemTask + 0x550`. `SystemTask::preCalc_` propagates
+that bit into the framework's half-rate calculation mode at `+0x209`.
+
+Changing only the interval to 1 made the plaza/news run too fast in the next
+manual test. The current implementation changes calculation mode and interval
+together: full-rate mode with interval 1 when enabled, the original half-rate mode
+with interval 2 when disabled. It still executes the scene setup and calls the
+original interval setter explicitly. The helper upgrades both earlier versions.
+Normal-speed movement and news animations are awaiting the latest manual retest.
 
 Reaching a sustained 60 FPS still
 depends on CPU/GPU work and pipeline compilation; no stable-60 benchmark is
@@ -117,7 +121,7 @@ after apply/idempotence/restore in isolated fixtures.
 The Windows candidate compiled 85 runtime units at O2 and two changed guest units
 at O1, reusing 520 current guest objects and retaining earlier graphics/font/wait
 fixes. Candidate SHA-256:
-`d5c3ba07ab22f77aa85ce813ac1d73aa3f97bf90a8aa65f12a1d1bfc8508ca74`.
+`fefb7df7f693dacc54b057e12d3566c6414c658816c492a312400ae92f8fb81c`.
 This follow-up recompiles the scene-entry unit and the Windows controller unit;
 the other candidate objects are reused.
 
@@ -130,13 +134,13 @@ CPU sanitizer tests cover Nintendo button chords/full signed stick range,
 physical motion units/axes, independent reference rotations, irregular sampling,
 bias, stalls, shared histories, actual worker reconnect/identity filtering,
 old packets after focus regain, and missing-DLL/disabled fallback. Gameplay tests
-exercise the full generated scene-enter function, preserved renderer flags,
-scoped interval 1/2 requests, all option combinations, NOP/LR preservation, and rejected build or
+exercise the full generated scene-enter function, matched full/half-rate modes
+and interval 1/2 requests, all option combinations, NOP/LR preservation, and rejected build or
 source mismatches. In-game physical aiming and plaza performance still need a
 manual play check; the device probe does not establish tutorial completion.
 
 All 32 runtime regression groups passed on the revised sources. The gameplay regression also
-rejects the branch-skipping implementation and checks automatic upgrade and
+rejects mismatched calculation/interval settings and checks automatic upgrade and
 byte-exact source restoration. Native-controller-only tests passed with the
 corrected yaw. Manual news visibility and aiming are being checked in the revised
 candidate; no gameplay crash is inferred from the user closing a test run.

@@ -56,8 +56,8 @@ PATCH_GPU_LINE
 }
 int main(int argc,char** argv) {
  assert(argc==3);bool plaza=std::atoi(argv[1]),disable=std::atoi(argv[2]);
- // sceneEnter must retain the renderer-state update. Only the scene's interval
- // changes at 60 FPS; skipping the entire block hides the 3D news scene.
+ // sceneEnter must execute its setter and couple full/half-rate calculation
+ // to interval 1/2. Interval-only changes run scene logic at the wrong speed.
  for(mode=0;mode<8;++mode) {
   nx::CPU c;c.x[0]=0x100000;c.x[31]=0x800000;
   nx::memory[NXB+0x2f9d2a0]=0x300000;nx::memory[0x300000]=0x400000;
@@ -65,7 +65,7 @@ int main(int argc,char** argv) {
   unsigned before=intervals;main_00051BA4(c);
   assert(intervals-before==unsigned(mode==3));
   if(mode==3)assert(requested_interval==unsigned(plaza?1:2));
-  assert(nx::memory[0x400550]==unsigned(mode==3?0xa5:0xa4));
+  assert(nx::memory[0x400550]==unsigned(mode==3&&!plaza?0xa5:0xa4));
   assert(c.x[31]==0x800000); // Patched branch still follows the normal epilogue.
  }
  // AArch64 NOP changes neither LR nor registers and invokes no stress callback.
@@ -123,6 +123,9 @@ with tempfile.TemporaryDirectory(prefix='sp2-gameplay-options-') as tmp:
     first.write_bytes(first.read_bytes().replace(patch.ORIGINAL_BRANCH,patch.LEGACY_BRANCH).replace(patch.SITES[0][4],patch.SITES[0][3]))
     run('--check');run();run()
     assert patch.LEGACY_BRANCH not in first.read_bytes() and patch.SITES[0][4] in first.read_bytes()
+    first.write_bytes(first.read_bytes().replace(patch.SITES[0][4],patch.FLAG_SETUP+patch.INTERVAL_ONLY))
+    run('--check');run();run()
+    assert patch.SITES[0][4] in first.read_bytes()
     run('--restore','--check');run('--restore');run('--restore')
     assert all((fixture/p).read_bytes()==data for p,data in originals.items())
     assert not (fixture / 'runtime/src/sp2_gameplay_options.h').exists()
@@ -139,4 +142,4 @@ with tempfile.TemporaryDirectory(prefix='sp2-gameplay-options-') as tmp:
     run(success=False)
     assert (fixture / patch.SITES[0][0]).read_bytes()==originals[patch.SITES[0][0]]
     assert not (fixture / 'runtime/src/sp2_gameplay_options.h').exists()
-print('PASS retained renderer flags, scoped 30/60 interval, independent options, NOP registers, build/anchor rejection, idempotence and byte-exact rollback')
+print('PASS coupled full/half-rate mode and 30/60 interval, independent options, NOP registers, build/anchor rejection, upgrade and byte-exact rollback')

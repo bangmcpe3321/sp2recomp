@@ -12,10 +12,19 @@ BUILD_ID = bytes.fromhex('F18FF3CFCBAD0884D72ABBEB6C540D6B' + '00' * 16)
 INCLUDE = b'#include "sp2_gameplay_options.h" // PATCH-SP2-GAMEPLAY-OPTIONS\n'
 ORIGINAL_BRANCH = b'    if (!c.zf) goto L_51C5C; // b.ne #0x51c5c\n'
 LEGACY_BRANCH = b'    if (nx::sp2::plaza_60fps_enabled() || !c.zf) goto L_51C5C; // PATCH-SP2-PLAZA-60FPS: b #0x51c5c\n'
+OLD_SETTER = b'    c.x[1] = uint32_t(0x2ull); // mov w1, #2\n    c.x[30] = NXB + 0x51c5cull; main_00E67D58(c); // bl #0xe67d58\n'
+INTERVAL_ONLY = b'    c.x[1] = nx::sp2::plaza_60fps_enabled() ? 1u : 2u; // PATCH-SP2-PLAZA-60FPS: retain renderer setup, change vblank interval\n    c.x[30] = NXB + 0x51c5cull; main_00E67D58(c); // bl #0xe67d58\n'
+OLD_FLAG = b'    c.x[9] = uint32_t(uint32_t(uint32_t(c.x[9]) | uint32_t(0x1ull))); // orr w9, w9, #1\n'
+FLAG_SETUP = OLD_FLAG + b'''    { uint64_t a = c.x[8] + 0x550ull; nx::st<uint32_t>(a, uint32_t(uint32_t(c.x[9]))); } // str w9, [x8, #0x550]
+    c.x[8] = uint64_t(NXB + 0x2f9d000ull); // adrp x8, #0x2f9d000
+    { uint64_t a = c.x[8] + 0x2a8ull; c.x[8] = uint64_t(nx::ld<uint64_t>(a)); } // ldr x8, [x8, #0x2a8]
+    { uint64_t a = c.x[8]; c.x[0] = uint64_t(nx::ld<uint64_t>(a)); } // ldr x0, [x8]
+'''
+COUPLED_FLAG = b'    c.x[9] = nx::sp2::plaza_60fps_enabled() ? uint32_t(c.x[9]) & ~1u : uint32_t(c.x[9]) | 1u; // PATCH-SP2-FRAME-MODE: match full/half-rate calculation to vblank interval\n'
 SITES = (
     ('gen/main/code_006.cpp', 0x51C54, bytes.fromhex('e1031f32'),
-     b'    c.x[1] = uint32_t(0x2ull); // mov w1, #2\n    c.x[30] = NXB + 0x51c5cull; main_00E67D58(c); // bl #0xe67d58\n',
-     b'    c.x[1] = nx::sp2::plaza_60fps_enabled() ? 1u : 2u; // PATCH-SP2-PLAZA-60FPS: retain renderer setup, change vblank interval\n    c.x[30] = NXB + 0x51c5cull; main_00E67D58(c); // bl #0xe67d58\n'),
+     FLAG_SETUP + OLD_SETTER,
+     FLAG_SETUP.replace(OLD_FLAG, COUPLED_FLAG) + INTERVAL_ONLY),
     ('gen/main/code_348.cpp', 0x1021FAC, bytes.fromhex('768f0f94'),
      b'    c.x[30] = NXB + 0x1021fb0ull; main_01405D84(c); // bl #0x1405d84\n',
      b'    if (!nx::sp2::dynamic_resolution_disabled()) { c.x[30] = NXB + 0x1021fb0ull; main_01405D84(c); } // PATCH-SP2-DYNAMIC-RESOLUTION: nop\n'),
@@ -54,6 +63,14 @@ def main():
             path = root / relative
             data = path.read_bytes()
             if relative == SITES[0][0]:
+                if data.count(FLAG_SETUP + INTERVAL_ONLY) == 1 and data.count(ORIGINAL_BRANCH) == 1 and data.count(INCLUDE) == 1:
+                    states.append(True)
+                    normalized = data.replace(INTERVAL_ONLY, OLD_SETTER, 1)
+                    if normalized.count(old) != 1:
+                        raise ValueError('Interval-only upgrade anchor mismatch')
+                    result = normalized.replace(INCLUDE, b'', 1) if args.restore else normalized.replace(old, new, 1)
+                    changes.append((path, result))
+                    continue
                 if data.count(LEGACY_BRANCH) == 1 and ORIGINAL_BRANCH not in data and data.count(old) == 1 and data.count(INCLUDE) == 1:
                     states.append(True)
                     result = data.replace(LEGACY_BRANCH, ORIGINAL_BRANCH, 1)

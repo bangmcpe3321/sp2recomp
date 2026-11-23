@@ -7,9 +7,10 @@
 > Chưa xác nhận ngắm trong game, 60 FPS ổn định hoặc phần credits Octo Expansion.
 > Xem [hướng dẫn, kiểm chứng và hoàn tác](docs/CONTROLLER_GAMEPLAY_OPTIONS.md).
 
-> Đã sửa tùy chọn 60 FPS làm mất cảnh studio tin tức: giữ nguyên phần khởi tạo
-> renderer và chỉ đổi khoảng chờ vblank. Chiều ngắm ngang của gyro thật cũng đã
-> được chỉnh lại theo phản hồi thử nghiệm.
+> Tùy chọn 60 FPS nay đồng bộ chế độ cập nhật game với khoảng chờ vblank và vẫn
+> chạy phần khởi tạo cảnh; đang chờ kiểm tra lại tốc độ chơi. Bản chỉ đổi vblank
+> trước đó làm cảnh chạy quá nhanh. Chiều ngắm ngang của gyro thật cũng đã được
+> chỉnh lại theo phản hồi thử nghiệm.
 
 > Đã sửa việc bị chậm/kẹt như đứng trên mực địch dù nền hướng dẫn không có mực.
 > Người dùng đã xác nhận hết hiện tượng này. Bộ đếm GPU nay trả số mẫu thực

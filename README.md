@@ -27,8 +27,9 @@ is not claimed. All 32 runtime regression groups pass. See
 [behavior, validation and rollback](docs/CONTROLLER_GAMEPLAY_OPTIONS.md).
 
 A manual comparison found that copying the 60 FPS branch patch hid the news
-studio. The revised option preserves renderer initialization and changes only
-the scene's vblank interval. Physical gyro horizontal aiming was also corrected
+studio. An interval-only follow-up then ran the scene too fast. The current option
+executes scene initialization and changes calculation mode together with the
+vblank interval; normal-speed play awaits manual recheck. Physical gyro horizontal aiming was also corrected
 from the user's test feedback.
 
 ### Bulk shader-cache build - November 24, 2026
