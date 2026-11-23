@@ -19,6 +19,8 @@ std::atomic<int32_t> g_mouse_dx{0}, g_mouse_dy{0};
 POINT g_mouse_last{500,400}, current{};
 bool g_mouse_have_last=true;
 constexpr int WM_MOUSEMOVE=0;
+int motion_x=0,motion_y=0;
+void mouse_motion(int x,int y) { motion_x+=x;motion_y+=y; }
 void GetCursorPos(POINT* p) { *p=current; }
 void GetClientRect(int, RECT* r) { *r={0,0,1000,800}; }
 void ScreenToClient(int, POINT*) {}
@@ -39,6 +41,7 @@ int main() {
     g_mouse_capture=true; g_mouse_have_last=false;
     move(500,400); move(501,401);
     assert(g_mouse_dx==148 && g_mouse_dy==50);
+    assert(motion_x==148 && motion_y==50);
     std::cout << "PASS: relative movement, duplicate messages, recentering, focus and first event\n";
 }
 '''

@@ -12,6 +12,21 @@ used to establish it, and how far the port has got.
 
 ## Current state
 
+### Mouse gyro, FPS overlay and stutter follow-up - November 23, 2026
+
+Windows mouse movement now feeds the emulated gyro while holding right mouse or
+using F1 capture. The latest adjustment corrects reported reversed horizontal
+aiming and lowers sensitivity to 0.03 degrees/pixel; use **[ / ]** while captured
+to adjust it. **F3** toggles the FPS overlay.
+
+Periodic rendering summaries and driver-cache checkpoints are disabled during
+normal play. Pipeline keys ignore padding, driver caches persist correctly, and cache
+eviction now retains recently used pipelines. Optional per-frame capture records
+compilation costs. **Stable 60 FPS and first-shot/transition
+stalls remain unverified.** See [controls, evidence and patch instructions](docs/FRAME_STUTTER_MOUSE_GYRO.md)
+and [23 runtime checks](tools/verify-tutorial-runtime.py).
+
+
 
 ### Plaza/news rendering follow-up — November 23, 2026
 
@@ -73,7 +88,8 @@ checked again with this build.
 
 *Actual Windows runtime output, with the tutorial's aiming instructions visible.
 Remaining banding/speckle is not declared fixed. This is not proof of completing
-the tutorial, and it does not add physical gyro or mouse-to-gyro input.*
+the tutorial. That November 21 build did not add mouse-to-gyro input; see the
+November 23 update above for the new mouse mapping. Physical gyro is not added.*
 
 See [the fixes, measured checks and limitations](docs/TUTORIAL_LIGHTING.md), the
 [apply/restore helper](tools/patches/patch-tutorial-lighting-sixaxis.py),

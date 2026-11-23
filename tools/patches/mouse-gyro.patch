@@ -1,0 +1,200 @@
+--- a/runtime/src/platform_win.cpp
++++ b/runtime/src/platform_win.cpp
+@@ -24,6 +24,7 @@
+ 
+ #include "kernel.h"
+ #include "platform.h"
++#include "mouse_gyro.h"
+ #include "timer_win.h"  // PATCH-TIMER-RESOLUTION
+ 
+ namespace nx::nvn { void save_pipeline_cache_on_exit(); }
+@@ -347,14 +348,8 @@
+ }
+ 
+ // ---- mouse look -------------------------------------------------------------------------------------------------
+-// The right stick aims the camera, and Splatoon 2 is a motion-controlled shooter: the camera is driven by the right
+-// stick plus gyro, so a mouse has to arrive as right-stick deflection. A raw delta integrated into a virtual stick
+-// that springs back to centre is the wrong shape for aiming (it re-centres while the mouse is still), so the delta
+-// is accumulated and drained by read_pad: the stick reports "this much movement since the last frame", which is what
+-// a mouse-driven camera needs. NX_MOUSE=0 turns it off; NX_MOUSE_SENS scales it (default 1.0).
+-//
+-// Captured only while the window has focus and the player holds the right button or presses F1 to toggle free look,
+-// so the desktop stays usable: without a capture the cursor would leave the window on the first big movement.
++// Splatoon 2 mouse look uses the emulated six-axis sensor. Hold right mouse or toggle F1
++// while focused. NX_MOUSE_GYRO=0 retains the former right-stick mapping.
+ std::atomic<bool> g_mouse_capture{false};
+ std::atomic<int32_t> g_mouse_dx{0}, g_mouse_dy{0};
+ POINT g_mouse_last{};
+@@ -374,6 +369,35 @@
+         return e && *e ? std::atof(e) : 1.0;
+     }();
+     return s;
++}
++
++static bool mouse_gyro_on() {
++    static const bool on = [] {
++        const char* e = std::getenv("NX_MOUSE_GYRO");
++        return e ? std::atoi(e)!=0 : std::strcmp(nx::game::kInfo.id,"sp2")==0;
++    }();
++    return mouse_on() && on;
++}
++static double& mouse_gyro_sens() {
++    static double value = [] {
++        const char* e=std::getenv("NX_MOUSE_GYRO_SENS");
++        double v=e ? std::atof(e) : 0.03; // degrees per pixel
++        return std::isfinite(v) && v>0 && v<=10 ? v : 0.03;
++    }();
++    return value;
++}
++static std::mutex g_mouse_motion_mutex;
++static MouseGyro g_mouse_motion;
++static void mouse_motion(int32_t dx, int32_t dy) {
++    if (!mouse_gyro_on()) return;
++    std::lock_guard lock(g_mouse_motion_mutex);
++    g_mouse_motion.move(dx,dy,mouse_gyro_sens());
++}
++bool read_mouse_gyro(unsigned sensor, MouseGyroSample& sample) {
++    if (!mouse_gyro_on()) return false;
++    std::lock_guard lock(g_mouse_motion_mutex);
++    sample=g_mouse_motion.sample(sensor,monotonic_ns());
++    return true;
+ }
+ 
+ // Re-centre the cursor so it cannot reach the screen edge and stop generating movement.
+@@ -389,6 +413,11 @@
+ 
+ static void mouse_set_capture(bool on) {
+     if (g_mouse_capture.exchange(on) == on) return;
++    g_mouse_dx=0; g_mouse_dy=0;
++    {
++        std::lock_guard lock(g_mouse_motion_mutex);
++        g_mouse_motion.capture(on,monotonic_ns());
++    }
+     if (on) {
+         ShowCursor(FALSE);
+         g_mouse_have_last = false;
+@@ -450,7 +479,7 @@
+     // Mouse -> right stick: the accumulated movement since the last frame, as stick deflection. Clamped to the stick
+     // range so a fast flick cannot wrap or overflow; there is no spring-back, so the camera keeps the position the
+     // player left it at (which is how a mouse should behave).
+-    if (mouse_on() && g_mouse_capture.load(std::memory_order_relaxed)) {
++    if (mouse_on() && !mouse_gyro_on() && g_mouse_capture.load(std::memory_order_relaxed)) {
+         const int32_t dx = g_mouse_dx.exchange(0, std::memory_order_relaxed);
+         const int32_t dy = g_mouse_dy.exchange(0, std::memory_order_relaxed);
+         if (dx || dy) {
+@@ -477,13 +506,20 @@
+             fps_overlay_position();
+             break;
+         case WM_KEYDOWN:
++            if ((w == VK_OEM_4 || w == VK_OEM_6) && !(l & (LPARAM(1) << 30)) &&
++                g_mouse_capture.load() && mouse_gyro_on()) {
++                auto& sensitivity=mouse_gyro_sens();
++                sensitivity=std::clamp(sensitivity*(w == VK_OEM_4 ? 0.8 : 1.25),0.001,10.0);
++                log("mouse gyro sensitivity: %.4f degrees/pixel",sensitivity);
++                return 0;
++            }
+             if (w == VK_F3 && !(l & (LPARAM(1) << 30))) {
+                 g_fps_enabled = !g_fps_enabled;
+                 fps_overlay_tick();
+                 return 0;
+             }
+             if (w == VK_F11) toggle_fullscreen(h);
+-            if (w == VK_F1 && GetForegroundWindow() == h && mouse_on())  // toggle mouse look without holding a button
++            if (w == VK_F1 && !(l & (LPARAM(1) << 30)) && GetForegroundWindow() == h && mouse_on())  // toggle mouse look without holding a button
+                 mouse_set_capture(!g_mouse_capture.load());
+             break;
+         case WM_SYSKEYDOWN:
+@@ -512,6 +548,7 @@
+                 POINT c{};
+                 GetCursorPos(&c);
+                 if (g_mouse_have_last) {
++                    mouse_motion(c.x - g_mouse_last.x,c.y - g_mouse_last.y);
+                     g_mouse_dx.fetch_add(c.x - g_mouse_last.x, std::memory_order_relaxed);
+                     g_mouse_dy.fetch_add(c.y - g_mouse_last.y, std::memory_order_relaxed);
+                     g_mouse_last = c;
+--- a/runtime/src/hle_hid.cpp
++++ b/runtime/src/hle_hid.cpp
+@@ -16,6 +16,9 @@
+ 
+ #include "ipc.h"
+ #include "platform.h"
++#if defined(_WIN32)
++#include "mouse_gyro.h"
++#endif
+ 
+ namespace nx {
+ 
+@@ -470,6 +473,20 @@
+         m[6] = float(-sy), m[7] = float(cy * sp), m[8] = float(cy * cp);
+         ax = -m[2], ay = -m[5], az = -m[8];  // gravity in the sensor frame
+     }
++#if defined(_WIN32)
++    // Explicit diagnostic poses keep precedence over manual mouse motion.
++    if (!sixaxis_seek() && !sixaxis_grid() && !sixaxis_wobble()) {
++        float p,y;
++        nx::plat::MouseGyroSample sample;
++        if (!sixaxis_pose(p,y) && nx::plat::read_mouse_gyro(sensor,sample)) {
++            st<uint64_t>(addr,sample.delta_ns);
++            ax=sample.acceleration[0]; ay=sample.acceleration[1]; az=sample.acceleration[2];
++            gx=sample.velocity[0]; gy=sample.velocity[1]; gz=sample.velocity[2];
++            angx=sample.angle[0]; angy=sample.angle[1]; angz=sample.angle[2];
++            for (int i=0;i<9;i++) m[i]=sample.direction[i];
++        }
++    }
++#endif
+     st<float>(addr + 0x10, ax);
+     st<float>(addr + 0x14, ay);
+     st<float>(addr + 0x18, az);
+--- /dev/null
++++ b/runtime/src/mouse_gyro.h
+@@ -0,0 +1,50 @@
++// Mouse displacement becomes controller motion, independent of the game's frame rate.
++#pragma once
++#include <cmath>
++#include <cstdint>
++namespace nx::plat {
++struct MouseGyroSample {
++    uint64_t delta_ns = 16666667;
++    float acceleration[3] = {0, 0, -1};
++    float velocity[3] = {}; // revolutions/second, as required by nn::hid
++    float angle[3] = {};    // revolutions
++    float direction[9] = {1,0,0, 0,1,0, 0,0,1};
++};
++// Caller serializes UI updates and sensor reads. Each Joy-Con has its own read cursor.
++class MouseGyro {
++    struct Cursor { double pitch=0, yaw=0; uint64_t ns=0; } cursors_[2];
++    double pitch_=0, yaw_=0;
++    bool captured_=false;
++public:
++    void capture(bool on, uint64_t now) {
++        captured_=on;
++        for (auto& c:cursors_) c={pitch_,yaw_,now};
++    }
++    void move(int32_t dx, int32_t dy, double degrees_per_pixel) {
++        if (!captured_ || !std::isfinite(degrees_per_pixel)) return;
++        // Mouse up tilts up; mouse right turns right. No stick deadzone or speed cap.
++        pitch_ -= double(dy)*degrees_per_pixel/360.0;
++        yaw_ += double(dx)*degrees_per_pixel/360.0;
++    }
++    MouseGyroSample sample(unsigned sensor, uint64_t now) {
++        MouseGyroSample s;
++        auto& c=cursors_[sensor & 1];
++        if (c.ns && now>c.ns) s.delta_ns=now-c.ns;
++        if (captured_ && c.ns && now>c.ns) {
++            s.velocity[0]=float((pitch_-c.pitch)*1e9/double(s.delta_ns));
++            s.velocity[1]=float((yaw_-c.yaw)*1e9/double(s.delta_ns));
++        }
++        // Equal-time reads must not consume motion intended for the next sample.
++        if (!c.ns || now>c.ns) c={pitch_,yaw_,now};
++        s.angle[0]=float(pitch_); s.angle[1]=float(yaw_);
++        constexpr double tau=6.2831853071795864769;
++        const double p=std::remainder(pitch_,1.0)*tau, y=std::remainder(yaw_,1.0)*tau;
++        const double cp=std::cos(p), sp=std::sin(p), cy=std::cos(y), sy=std::sin(y);
++        const float m[9]={float(cy),float(sy*sp),float(sy*cp),0,float(cp),float(-sp),float(-sy),float(cy*sp),float(cy*cp)};
++        for (int k=0;k<9;k++) s.direction[k]=m[k];
++        s.acceleration[0]=-m[2]; s.acceleration[1]=-m[5]; s.acceleration[2]=-m[8];
++        return s;
++    }
++};
++bool read_mouse_gyro(unsigned sensor, MouseGyroSample& sample);
++} // namespace nx::plat

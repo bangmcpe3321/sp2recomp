@@ -1,5 +1,12 @@
 # sp2decomp
 
+> Cập nhật 23/11/2026: đã thêm ngắm bằng gyro qua chuột trên Windows.
+> Giữ chuột phải hoặc nhấn F1; dùng [ / ] để giảm/tăng độ nhạy, F3 để bật/tắt FPS.
+> Đã giảm độ nhạy mặc định và sửa chiều ngang theo phản hồi thử nghiệm.
+> Chưa xác nhận đạt 60 FPS ổn định hoặc hết khựng ở phát mực đầu tiên/chuyển cảnh.
+> Xem [hướng dẫn và bằng chứng](docs/FRAME_STUTTER_MOUSE_GYRO.md).
+
+
 [English](README.md) · **Tiếng Việt**
 
 Ghi chú nghiên cứu dịch ngược và công cụ cho tệp thực thi `main` trên Nintendo

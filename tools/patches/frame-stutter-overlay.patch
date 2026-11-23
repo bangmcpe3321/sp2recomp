@@ -1,0 +1,713 @@
+--- a/runtime/src/nvn/nvn_queue.cpp
++++ b/runtime/src/nvn/nvn_queue.cpp
+@@ -21,6 +21,8 @@
+ #include "platform.h"
+ 
+ namespace nx::nvn {
++
++void record_present_interval(uint32_t interval);
+ 
+ // Submits the game made and submits whose replay (and GPU work, write-backs) finished. The game records the next frame
+ // on one thread while another submits the last one, and our replay runs inside nvnQueueSubmitCommands: a fence the
+@@ -366,10 +368,18 @@
+     if (off || interval <= 0) return;
+     uint64_t now = plat::monotonic_ns();
+     if (next > now) plat::sleep_ns(next - now), now = plat::monotonic_ns();
+-    static uint64_t presents = 0, at2 = 0;  // how often the game asks for 30 fps (interval 2), per 600 presents
+-    at2 += interval >= 2;
+-    if (++presents % 600 == 0)
+-        log("nvn: %llu of the last 600 presents at interval >= 2", (unsigned long long)at2), at2 = 0, log_wait_sites();
++    // Synchronous console/file statistics caused a periodic hitch on the presenting
++    // game thread. They are optional; the pacing deadline below is independent.
++    static const bool stats = [] {
++        const char* e = std::getenv("NX_PRESENT_STATS");
++        return e && std::atoi(e) != 0;
++    }();
++    if (stats) {
++        static uint64_t presents = 0, at2 = 0;
++        at2 += interval >= 2;
++        if (++presents % 600 == 0)
++            log("nvn: %llu of the last 600 presents at interval >= 2", (unsigned long long)at2), at2 = 0, log_wait_sites();
++    }
+     uint64_t period = uint64_t(interval) * 16'666'667ull;
+     next = (next > now || now - next < period ? next : now) + period;
+ }
+@@ -398,6 +408,7 @@
+         } else {
+             ++t_queue;  // a texture index outside the window: counted below, never queued
+         }
++        record_present_interval(uint32_t(w->interval));
+         pace_present(w->interval);
+     }
+     const uint64_t total = plat::monotonic_ns() - t_in;
+--- a/runtime/src/nvn/nvn_pipeline_cache.cpp
++++ b/runtime/src/nvn/nvn_pipeline_cache.cpp
+@@ -1,10 +1,13 @@
+ // A VkPipelineCache kept on disk (<data root>/pipelines_<vendor>_<device>.bin), and the cost of what the replay
+ // creates on the fly. Pipelines are compiled the first time a draw needs them, inside the replay: the course's
+ // stutters when new objects come in (16-42 ms replays on the RTX 3050). The driver checks the cache header itself
+-// (vendor, device, driver build): a stale file is ignored. Saved every 600 presents when it grew.
++// (vendor, device, driver build). Incompatible files are rejected before creation.
++// Saved on normal shutdown after pipeline-cache requests, including same-size updates.
+ // NX_PIPELINE_CACHE=0: no cache (bisecting, or to measure first-run stutter).
+ #include <cstdio>
+ #include <cstdlib>
++#include <cstring>
++#include <filesystem>
+ #include <vector>
+ 
+ #include "nvn_stats.h"
+@@ -19,13 +22,27 @@
+ 
+ VkPipelineCache g_cache = VK_NULL_HANDLE;
+ bool g_tried = false;
+-size_t g_saved_size = 0;
++uint64_t g_cache_revision = 0, g_saved_revision = 0;
+ std::string g_path;
+ uint64_t g_pipelines = 0, g_pipeline_ns = 0, g_astc = 0, g_astc_ns = 0;
++uint64_t g_total_pipelines = 0, g_total_pipeline_ns = 0;
+ 
+ }  // namespace
+ 
++static bool compatible_pipeline_cache(const std::vector<uint8_t>& data, const VkPhysicalDeviceProperties& properties) {
++    if (data.size() < sizeof(VkPipelineCacheHeaderVersionOne)) return false;
++    VkPipelineCacheHeaderVersionOne header{};
++    std::memcpy(&header, data.data(), sizeof header);
++    return header.headerSize >= sizeof header && header.headerSize <= data.size() &&
++           header.headerVersion == VK_PIPELINE_CACHE_HEADER_VERSION_ONE &&
++           header.vendorID == properties.vendorID && header.deviceID == properties.deviceID &&
++           std::memcmp(header.pipelineCacheUUID, properties.pipelineCacheUUID, VK_UUID_SIZE) == 0;
++}
++
+ VkPipelineCache pipeline_cache() {
++    // Both graphics and compute creation request this cache immediately before the
++    // driver can change it. A serialized cache can change without changing length.
++    ++g_cache_revision;
+     if (g_tried) return g_cache;
+     g_tried = true;
+     if (const char* e = std::getenv("NX_PIPELINE_CACHE"); e && e[0] == '0') return VK_NULL_HANDLE;
+@@ -42,56 +59,90 @@
+         if (n > 0) data.resize(size_t(n)), data.resize(std::fread(data.data(), 1, data.size(), f));
+         std::fclose(f);
+     }
++    if (!data.empty() && !compatible_pipeline_cache(data, p)) {
++        log("nvn/vk: pipeline cache %s is incompatible with this device/driver; starting empty", g_path.c_str());
++        data.clear();
++    }
+     VkPipelineCacheCreateInfo ci{VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO};
+     ci.initialDataSize = data.size();
+     ci.pInitialData = data.empty() ? nullptr : data.data();
+     if (p_vkCreatePipelineCache(vk_device(), &ci, nullptr, &g_cache) != VK_SUCCESS) {
++        data.clear();
+         ci.initialDataSize = 0, ci.pInitialData = nullptr;  // a cache the driver refuses: start empty
+-        p_vkCreatePipelineCache(vk_device(), &ci, nullptr, &g_cache);
++        g_cache = VK_NULL_HANDLE;
++        if (p_vkCreatePipelineCache(vk_device(), &ci, nullptr, &g_cache) != VK_SUCCESS) g_cache = VK_NULL_HANDLE;
+     }
+-    g_saved_size = data.size();
+     log("nvn/vk: pipeline cache %s (%zu bytes loaded)", g_path.c_str(), data.size());
+     return g_cache;
+ }
+ 
+ void pipeline_cache_save() {
+-    if (!g_cache) return;
++    if (!g_cache || g_cache_revision == g_saved_revision) return;
+     size_t n = 0;
+-    if (p_vkGetPipelineCacheData(vk_device(), g_cache, &n, nullptr) != VK_SUCCESS || n <= g_saved_size) return;
++    if (p_vkGetPipelineCacheData(vk_device(), g_cache, &n, nullptr) != VK_SUCCESS || !n) return;
+     std::vector<uint8_t> data(n);
+     if (p_vkGetPipelineCacheData(vk_device(), g_cache, &n, data.data()) != VK_SUCCESS) return;
+     std::string tmp = g_path + ".tmp";
+     if (FILE* f = plat::fopen_utf8(tmp, "wb")) {
+         bool ok = std::fwrite(data.data(), 1, n, f) == n;
+         ok = std::fclose(f) == 0 && ok;
+-        std::remove(g_path.c_str());
+-        if (ok && std::rename(tmp.c_str(), g_path.c_str()) == 0) g_saved_size = n;
++        // Replace only after the complete temporary file is closed successfully.
++        // filesystem::rename replaces an existing file on Windows too, using UTF-8 paths.
++        if (ok) {
++            std::error_code error;
++            std::filesystem::rename(std::filesystem::u8path(tmp), std::filesystem::u8path(g_path), error);
++            if (!error) g_saved_revision = g_cache_revision;
++        }
+     }
+ }
+ 
+ void note_pipeline_created(uint64_t ns) {
+     g_pipelines++, g_pipeline_ns += ns;
++    ++g_total_pipelines;
++    g_total_pipeline_ns += ns;
+     if (host_stats_on()) {
+         g_host_stats.pipe_builds.fetch_add(1, std::memory_order_relaxed);
+         g_host_stats.pipe_build_ns.fetch_add(ns, std::memory_order_relaxed);
+     }
+ }
++// Called under the GPU lock, like pipeline creation and the frame-time CSV writer.
++// Lifetime totals survive creation_log's timing-window resets.
++void pipeline_compile_totals(uint64_t& count, uint64_t& ns) {
++    count = g_total_pipelines;
++    ns = g_total_pipeline_ns;
++}
++
+ void note_astc_decoded(uint64_t ns) { g_astc++, g_astc_ns += ns; }
+ 
+ // One line per timing window (nvn_vk.cpp log_timing): what the replay created, and the time it took.
+ void creation_log(uint64_t frames) {
+-    if (g_pipelines || g_astc)
+-        log("nvn/vk: created over %llu frames: %llu pipelines (%.1f ms), %llu ASTC textures decoded (%.1f ms)",
+-            (unsigned long long)frames, (unsigned long long)g_pipelines, double(g_pipeline_ns) / 1e6,
+-            (unsigned long long)g_astc, double(g_astc_ns) / 1e6);
++    static const bool verbose = [] {
++        const char* env = std::getenv("NX_RENDER_STATS");
++        return env && std::atoi(env) != 0;
++    }();
++    if (verbose) {
++        if (g_pipelines || g_astc)
++            log("nvn/vk: created over %llu frames: %llu pipelines (%.1f ms), %llu ASTC textures decoded (%.1f ms)",
++                (unsigned long long)frames, (unsigned long long)g_pipelines, double(g_pipeline_ns) / 1e6,
++                (unsigned long long)g_astc, double(g_astc_ns) / 1e6);
++        log("nvn/vk: images live: %llu (%llu MB), pipelines live: %llu", (unsigned long long)g_image_live_count.load(),
++            (unsigned long long)(g_image_live_bytes.load() >> 20), (unsigned long long)g_pipelines_alive.load());
++        image_stats_log();
++        image_holder_log();
++    }
+     g_pipelines = g_pipeline_ns = g_astc = g_astc_ns = 0;
+-    // PATCH-MEMORY-ACCOUNTING: the images the textures hold right now (one VkDeviceMemory each).
+-    log("nvn/vk: images live: %llu (%llu MB), pipelines live: %llu", (unsigned long long)g_image_live_count.load(),
+-        (unsigned long long)(g_image_live_bytes.load() >> 20), (unsigned long long)g_pipelines_alive.load());
+-    image_stats_log();  // PATCH-IMGSTATS
+-    image_holder_log();  // PATCH-HOLDER-STATS (NX_HOLDER_STATS)
+-    static uint64_t windows = 0;
+-    if (++windows % 10 == 0) pipeline_cache_save();
++    // Serializing hundreds of MB on the render thread is a visible periodic hitch.
++    // Normal shutdown saves the cache; timed checkpoints are an explicit recovery diagnostic.
++    static const uint64_t save_interval = [] {
++        const char* env = std::getenv("NX_PIPELINE_CACHE_SAVE_INTERVAL");
++        return env ? std::strtoull(env, nullptr, 10) : 0ull;
++    }();
++    static uint64_t elapsed = 0;
++    elapsed += frames;
++    if (save_interval && elapsed >= save_interval) {
++        pipeline_cache_save();
++        elapsed = 0;
++    }
+ }
+ 
+ }  // namespace nx::nvn
+--- a/runtime/src/nvn/nvn_pipeline.cpp
++++ b/runtime/src/nvn/nvn_pipeline.cpp
+@@ -1,3 +1,4 @@
++#include "pipeline_lru.h"
+ // Pipelines and sampled resources (nvn_pipeline.h). Everything is cached for the life of the process: layouts by
+ // their bindings, pipelines by their full state, samplers by their state, views by (image, type).
+ #include <algorithm>
+@@ -588,21 +589,29 @@
+     }
+ }
+ 
++// DepthStencilInfo carries one alignment gap after its three byte flags. NVN
++// state records can copy arbitrary stack padding into it; padding is not state.
++static ByteKey<sizeof(PipelineKey)> pipeline_cache_key(const PipelineKey& key) {
++    ByteKey<sizeof(PipelineKey)> result;
++    std::memcpy(result.b, &key, sizeof key);
++    constexpr size_t padding_begin = offsetof(DepthStencilInfo, stencil_test) + sizeof(key.depth.stencil_test);
++    constexpr size_t padding_end = offsetof(DepthStencilInfo, depth_func);
++    static_assert(padding_begin <= padding_end);
++    std::memset(result.b + offsetof(PipelineKey, depth) + padding_begin, 0, padding_end - padding_begin);
++    return result;
++}
++
+ VkPipeline graphics_pipeline(const PipelineKey& key, const ProgramLayout& layout) {
+     // By the key's bytes, but hashed (nvn_pipeline.h) instead of a ~700-byte std::string built and compared down a
+     // tree per draw; and the last entry first: consecutive draws mostly share their state.
+     using Key = ByteKey<sizeof(PipelineKey)>;
+-    static std::unordered_map<Key, VkPipeline, ByteKeyHash> cache;
+-    static std::deque<Key> order;  // PATCH-PIPE-CAP: insertion order, for the eviction below
+-    static const std::pair<const Key, VkPipeline>* last = nullptr;  // reset when the entry is evicted
+-    // PATCH-PIPE-CAP: gameplay screens create a new pipeline every frame or two (thousands per minute), and each one
+-    // costs the driver ~0.5-1 MB, so an unbounded cache ends the run at the memory limit. The cache is bounded by
+-    // NX_PIPE_CAP (2048), oldest first. An evicted pipeline is destroyed in pipeline_begin_submit, once no submit
+-    // that could reference it is in flight. NX_PIPE_CAP=0: unbounded, as before.
++    // A bounded LRU retains frequently used plaza/ink pipelines across less common draws.
++    // Retired pipelines still follow the existing in-flight-submit grace period below.
+     static const size_t cap = [] {
+         const char* e = std::getenv("NX_PIPE_CAP");
+         return e ? size_t(std::strtoul(e, nullptr, 10)) : size_t(2048);
+     }();
++    static PipelineLru<Key,VkPipeline,ByteKeyHash> cache(cap);
+     static uint64_t evicted = 0;
+     // PATCH-PIPE-DIFF (NX_PIPE_DIFF): which key field made this draw a new pipeline? On a miss the key is compared
+     // with the last key any draw used (not the last miss: between two misses many state changes pass by and the first
+@@ -613,22 +622,16 @@
+     static bool have_prev = false;
+     static uint64_t misses = 0, logs = 0;
+     const std::string vs_h = key.vs ? key.vs->hash : "-", fs_h = key.fs ? key.fs->hash : "-";
++    const Key k = pipeline_cache_key(key);
+     const auto note_used = [&] {
+         if (!diff) return;
+-        prev.assign(reinterpret_cast<const uint8_t*>(&key), reinterpret_cast<const uint8_t*>(&key) + sizeof key);
++        prev.assign(k.b, k.b + sizeof key);
+         prev_vs = vs_h, prev_fs = fs_h, have_prev = true;
+     };
+-    if (last && std::memcmp(&key, last->first.b, sizeof key) == 0) {
++    if (const auto* found=cache.find(k)) {
+         note_used();
+         if (host_stats_on()) g_host_stats.pipe_hits.fetch_add(1, std::memory_order_relaxed);
+-        return last->second;
+-    }
+-    Key k;
+-    std::memcpy(k.b, &key, sizeof key);
+-    if (auto it = cache.find(k); it != cache.end()) {
+-        note_used();
+-        if (host_stats_on()) g_host_stats.pipe_hits.fetch_add(1, std::memory_order_relaxed);
+-        return (last = &*it)->second;
++        return *found;
+     }
+     // PATCH-PIPE-DIFF-BEGIN: the first differing field against the key the previous draw used.
+     if (diff) {
+@@ -912,30 +915,14 @@
+     else if (g_trace)
+         log("nvn/vk: pipeline %zu: %s + %s", cache.size() + 1, key.vs ? key.vs->hash.c_str() : "-", key.fs ? key.fs->hash.c_str() : "-");
+     g_pipelines_alive++;  // PATCH-PIPELINE-COUNT
+-    const std::pair<const Key, VkPipeline>* entry = &*cache.emplace(k, p).first;
+-    // PATCH-PIPE-CAP: bound the cache, oldest first. The evicted pipeline is destroyed in pipeline_begin_submit, so
+-    // no submit recorded before the eviction (which is the only one that can name it) can still be running.
+-    if (cap) {
+-        order.push_back(k);
+-        while (cache.size() > cap && order.size() > 1) {
+-            const Key old = order.front();
+-            order.pop_front();
+-            if (old == k) {  // the newest entry reached the front: the cap is below the live set, keep it
+-                order.push_back(old);
+-                break;
+-            }
+-            auto it = cache.find(old);
+-            if (it == cache.end()) continue;
+-            if (last == &*it) last = nullptr;
+-            g_pipe_dead.emplace_back(nx::g_frame.load(), it->second);
+-            cache.erase(it);
+-            evicted++;
+-            if (host_stats_on()) g_host_stats.pipe_evicted.fetch_add(1, std::memory_order_relaxed);
+-        }
+-        if (evicted && (evicted % 500) == 0)
+-            log("nvn/vk: pipeline cache at its cap (%zu): %llu evicted, %zu live", cap, (unsigned long long)evicted, cache.size());
+-    }
+-    return (last = entry)->second;
++    cache.insert(k,p,[&](VkPipeline retired) {
++        g_pipe_dead.emplace_back(nx::g_frame.load(),retired);
++        ++evicted;
++        if (host_stats_on()) g_host_stats.pipe_evicted.fetch_add(1,std::memory_order_relaxed);
++    });
++    if (evicted && evicted%500==0)
++        log("nvn/vk: pipeline cache at its cap (%zu): %llu evicted, %zu live",cap,(unsigned long long)evicted,cache.size());
++    return p;
+ }
+ 
+ // ---- sampled textures -------------------------------------------------------------------------------------------------
+--- /dev/null
++++ b/runtime/src/nvn/pipeline_lru.h
+@@ -0,0 +1,47 @@
++// A bounded pipeline cache. Hits retain recently used pipelines; destruction is deferred by the caller.
++#pragma once
++#include <cstddef>
++#include <list>
++#include <unordered_map>
++#include <utility>
++namespace nx::nvn {
++template<class Key, class Value, class Hash> class PipelineLru {
++    using Order=std::list<Key>;
++    struct Entry { Value value; typename Order::iterator position; };
++    using Entries=std::unordered_map<Key,Entry,Hash>;
++    Order order_;
++    Entries entries_;
++    const typename Entries::value_type* last_=nullptr;
++    size_t capacity_;
++public:
++    explicit PipelineLru(size_t capacity):capacity_(capacity) {}
++    size_t size() const { return entries_.size(); }
++    const Value* find(const Key& key) {
++        // Consecutive hits are already most recent. Unordered-map rehash preserves entry pointers.
++        if (last_ && last_->first==key) return &last_->second.value;
++        auto found=entries_.find(key);
++        if (found==entries_.end()) return nullptr;
++        order_.splice(order_.end(),order_,found->second.position);
++        last_=&*found;
++        return &found->second.value;
++    }
++    template<class Retire> void insert(const Key& key,Value value,Retire retire) {
++        auto position=order_.insert(order_.end(),key);
++        auto [entry,added]=entries_.emplace(key,Entry{value,position});
++        if (!added) { // Defensive replacement: retire the old resource, retaining its original order node.
++            order_.erase(position);
++            retire(entry->second.value);
++            entry->second.value=value;
++            order_.splice(order_.end(),order_,entry->second.position);
++        }
++        last_=&*entry;
++        while (capacity_ && entries_.size()>capacity_) {
++            auto old=entries_.find(order_.front());
++            if (last_==&*old) last_=nullptr;
++            retire(old->second.value);
++            entries_.erase(old);
++            order_.pop_front();
++        }
++    }
++};
++} // namespace nx::nvn
+--- a/runtime/src/nvn/nvn_vk.cpp
++++ b/runtime/src/nvn/nvn_vk.cpp
+@@ -27,14 +27,51 @@
+ #include <nx/game.h>
+ #include <nx/runtime.h>  // NX_SHADER_STATS (nx::g_frame)
+ 
++#if defined(_WIN32)
++namespace nx::plat { void fps_presented(uint64_t now); }
++#endif
++
+ namespace nx::nvn {
+ 
+ using namespace nx::vk;
++void pipeline_compile_totals(uint64_t& count, uint64_t& ns);
+ 
+ 
+ namespace {
+ 
+ std::recursive_mutex g_gpu;  // the whole GPU side: one submitting thread at a time
++
++// Optional bounded frame-time capture. No per-frame file I/O: write once when the
++// window closes, outside gameplay. Useful for p95/p99 checks rather than averages.
++const char* frame_csv_path() {
++    static const char* path = std::getenv("NX_FRAME_CSV");
++    return path && *path ? path : nullptr;
++}
++std::atomic<uint32_t> g_present_interval{1};
++struct PresentSample { uint64_t frame, ns; uint32_t interval; uint64_t pipeline_count, pipeline_ns; };
++std::vector<PresentSample> g_present_samples;
++uint64_t g_last_present_ns = 0, g_last_pipeline_count = 0, g_last_pipeline_ns = 0;
++void sample_present(uint64_t now) {
++    if (!frame_csv_path()) return;
++    uint64_t count, ns;
++    pipeline_compile_totals(count, ns);
++    if (g_last_present_ns && g_present_samples.size() < 120000)
++        g_present_samples.push_back({nx::g_frame.load(), now - g_last_present_ns, g_present_interval.load(),
++                                    count - g_last_pipeline_count, ns - g_last_pipeline_ns});
++    g_last_present_ns = now; g_last_pipeline_count = count; g_last_pipeline_ns = ns;
++}
++void flush_present_samples() {
++    const char* path = frame_csv_path();
++    if (!path || g_present_samples.empty()) return;
++    if (FILE* f = plat::fopen_utf8(path, "wb")) {
++        std::fprintf(f, "frame,interval_ms,requested_interval,pipeline_count,pipeline_ms\n");
++        for (const auto& sample : g_present_samples)
++            std::fprintf(f, "%llu,%.6f,%u,%llu,%.6f\n", (unsigned long long)sample.frame, double(sample.ns) / 1e6,
++                         sample.interval, (unsigned long long)sample.pipeline_count, double(sample.pipeline_ns) / 1e6);
++        std::fclose(f);
++    }
++}
++
+ bool g_ready = false, g_failed = false;
+ VkInstance g_instance = VK_NULL_HANDLE;
+ VkPhysicalDevice g_physical = VK_NULL_HANDLE;
+@@ -470,6 +507,17 @@
+ }  // namespace
+ 
+ std::recursive_mutex& gpu_lock() { return g_gpu; }
++
++void record_present_interval(uint32_t interval) { g_present_interval = interval; }
++
++void save_pipeline_cache_on_exit() {
++    // WM_CLOSE runs on the window thread. Serialize with graphics/compute pipeline
++    // creation; saving here cannot interrupt an otherwise healthy presented frame.
++    std::lock_guard lk(g_gpu);
++    flush_present_samples();
++    pipeline_cache_save();
++}
++
+ VkDevice vk_device() { return g_device; }
+ VkPhysicalDevice vk_physical() { return g_physical; }
+ VkQueue vk_queue() { return g_queue; }
+@@ -596,6 +644,11 @@
+     frame_times().encode_ns += t1 - t0, frame_times().fence_ns += plat::monotonic_ns() - t1;
+ }
+ 
++bool render_stats_enabled() {
++    static const bool on = [] { const char* e = std::getenv("NX_RENDER_STATS"); return e && e[0] == '1'; }();
++    return on;
++}
++
+ void log_timing(uint64_t frames) {
+     auto ms = [&](uint64_t ns) { return double(ns) / 1e6 / double(frames); };
+     static uint64_t last = 0;  // wall clock: the real frame rate
+@@ -604,12 +657,13 @@
+     last = now;
+     const Timing& t = g_timing;
+     uint64_t known = t.replay_ns + t.encode_ns + t.fence_ns;
+-    log("nvn/vk: per frame over %llu: %.1f fps, %.1f submits, replay %.2f ms, submit (encode) %.2f ms, fence wait "
++    if (render_stats_enabled()) log("nvn/vk: per frame over %llu: %.1f fps, %.1f submits, replay %.2f ms, submit (encode) %.2f ms, fence wait "
+         "%.2f ms, other %.2f ms, present %.2f ms, upload %.2f MB",
+         (unsigned long long)frames, fps, double(t.submits) / double(frames), ms(t.replay_ns), ms(t.encode_ns),
+         ms(t.fence_ns), ms(t.submit_ns > known ? t.submit_ns - known : 0), ms(t.present_ns),
+         double(t.upload_bytes) / 1e6 / double(frames));
+-    frame_log(frames);
++    static const bool gpu_stats = std::getenv("NX_GPU_PROFILE") != nullptr;
++    if (render_stats_enabled() || gpu_stats) frame_log(frames);
+     creation_log(frames);  // pipelines and ASTC decodes of the window; saves the pipeline cache now and then
+     g_timing = {};
+ }
+@@ -617,7 +671,10 @@
+ // gpu_present's time, whatever way it returns.
+ struct PresentTimer {
+     uint64_t t0 = plat::monotonic_ns();
+-    ~PresentTimer() { g_timing.present_ns += plat::monotonic_ns() - t0; }
++    ~PresentTimer() {
++        const uint64_t now = plat::monotonic_ns();
++        g_timing.present_ns += now - t0;
++    }
+ };
+ 
+ }  // namespace
+@@ -748,7 +805,7 @@
+             src ? int(src->uploaded) : 0, src ? int(src->texels) : 0,
+             src ? (unsigned long long)src->rendered_at : 0ull);
+     }
+-    if (presents % (presents < 300 ? 60 : 300) == 0) draw_log_stats();
++    if (render_stats_enabled() && presents % (presents < 300 ? 60 : 300) == 0) draw_log_stats();
+     if (presents % 60 == 0) log_timing(60), gpu_profile_log(60);
+     if (presents % 300 == 0) zero_draws_log();
+     // NX_PRESENT_TEST_ALL=1 (with NX_PRESENT_TEST): the present pass runs for every frame, and its submit is timed.
+@@ -869,7 +926,7 @@
+     if (!drawn) transition(g_cb, dst, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+     static uint64_t presents = 0;
+     presents++;
+-    if (presents % (presents < 300 ? 60 : 300) == 0) draw_log_stats();
++    if (render_stats_enabled() && presents % (presents < 300 ? 60 : 300) == 0) draw_log_stats();
+     if (presents % 60 == 0) log_timing(60), gpu_profile_log(60);
+     if (presents % 300 == 0) zero_draws_log();
+     frame_sig_flush(presents);
+@@ -904,6 +961,13 @@
+     pi.pSwapchains = &g_swapchain;
+     pi.pImageIndices = &index;
+     r = p_vkQueuePresentKHR(g_queue, &pi);
++    if (r == VK_SUCCESS || r == VK_SUBOPTIMAL_KHR) {
++        const uint64_t now = plat::monotonic_ns();
++        sample_present(now);
++#if defined(_WIN32)
++        plat::fps_presented(now);
++#endif
++    }
+     plat::frame_presented();  // cores, CPU time, present intervals (frame_stats.cpp)
+     // SUBOPTIMAL re-makes the swapchain only when the surface size changed: Android returns it for every present when
+     // the swapchain's transform is not the display's (a Galaxy S23 did for Hades), a rebuild per frame.
+--- a/runtime/src/platform_win.cpp
++++ b/runtime/src/platform_win.cpp
+@@ -7,6 +7,7 @@
+ #include <chrono>
+ #include <cstdlib>
+ #include <cstring>
++#include <cwchar>
+ #include <filesystem>
+ #include <thread>
+ 
+@@ -24,6 +25,8 @@
+ #include "kernel.h"
+ #include "platform.h"
+ #include "timer_win.h"  // PATCH-TIMER-RESOLUTION
++
++namespace nx::nvn { void save_pipeline_cache_on_exit(); }
+ 
+ namespace nx {
+ namespace {
+@@ -230,6 +233,117 @@
+         SetWindowPos(h, nullptr, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
+     }
+     g_fullscreen = !g_fullscreen;
++}
++
++// ---- FPS overlay ----------------------------------------------------------------------------------------------
++// A small owned, click-through window is composed above the Vulkan surface. Only
++// the window thread draws text, at 4 Hz; the render thread updates a few counters.
++struct FpsCounters {
++    std::atomic<uint64_t> frames{0}, last_ns{0}, peak_ns{0};
++    void presented(uint64_t now) {
++        const uint64_t previous = last_ns.exchange(now, std::memory_order_relaxed);
++        if (previous && now >= previous) {
++            const uint64_t gap = now - previous;
++            uint64_t peak = peak_ns.load(std::memory_order_relaxed);
++            while (peak < gap && !peak_ns.compare_exchange_weak(peak, gap, std::memory_order_relaxed)) {}
++        }
++        frames.fetch_add(1, std::memory_order_release);
++    }
++};
++static FpsCounters g_fps_counters;
++void fps_presented(uint64_t now) { g_fps_counters.presented(now); }
++
++static constexpr UINT_PTR kFpsTimer = 0x535032;
++static HWND g_fps_window = nullptr;
++static HFONT g_fps_font = nullptr;
++static UINT g_fps_dpi = 0;
++static bool g_fps_enabled = true;
++static wchar_t g_fps_text[128] = L"FPS: --\nFrame: -- ms";
++
++static void fps_overlay_position() {
++    if (!g_fps_window) return;
++    if (!g_fps_enabled || !g_window || !IsWindowVisible(g_window) || IsIconic(g_window) ||
++        GetForegroundWindow() != g_window) {
++        ShowWindow(g_fps_window, SW_HIDE);
++        return;
++    }
++    const UINT dpi = std::max<UINT>(96, GetDpiForWindow(g_window));
++    if (dpi != g_fps_dpi) {
++        if (g_fps_font) DeleteObject(g_fps_font);
++        g_fps_font = CreateFontW(-MulDiv(16, dpi, 96), 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
++                                DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
++                                CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_MODERN, L"Consolas");
++        g_fps_dpi = dpi;
++    }
++    POINT point{MulDiv(8, dpi, 96), MulDiv(8, dpi, 96)};
++    ClientToScreen(g_window, &point);
++    SetWindowPos(g_fps_window, HWND_TOP, point.x, point.y, MulDiv(270, dpi, 96), MulDiv(52, dpi, 96),
++                 SWP_NOACTIVATE | SWP_SHOWWINDOW);
++}
++
++static void fps_overlay_tick() {
++    static uint64_t previous_ns = 0, previous_frames = 0;
++    const uint64_t now = monotonic_ns();
++    const uint64_t frames = g_fps_counters.frames.load(std::memory_order_acquire);
++    const uint64_t last = g_fps_counters.last_ns.load(std::memory_order_relaxed);
++    uint64_t peak = g_fps_counters.peak_ns.exchange(0, std::memory_order_relaxed);
++    if (last && now >= last) peak = std::max(peak, now - last); // A stall is visible before the next present.
++    if (previous_ns && now > previous_ns) {
++        const uint64_t count = frames - previous_frames;
++        const double fps = double(count) * 1e9 / double(now - previous_ns);
++        if (count)
++            std::swprintf(g_fps_text, sizeof g_fps_text / sizeof *g_fps_text,
++                          L"%.1f FPS\n%.1f ms | peak %.1f ms", fps,
++                          double(now - previous_ns) / double(count) / 1e6, double(peak) / 1e6);
++        else
++            std::swprintf(g_fps_text, sizeof g_fps_text / sizeof *g_fps_text,
++                          L"0.0 FPS\nFrame stalled | %.0f ms", double(peak) / 1e6);
++    }
++    previous_ns = now, previous_frames = frames;
++    fps_overlay_position();
++    if (g_fps_window && IsWindowVisible(g_fps_window)) InvalidateRect(g_fps_window, nullptr, FALSE);
++}
++
++static LRESULT CALLBACK fps_overlay_proc(HWND h, UINT msg, WPARAM w, LPARAM l) {
++    switch (msg) {
++        case WM_NCHITTEST: return HTTRANSPARENT;
++        case WM_MOUSEACTIVATE: return MA_NOACTIVATE;
++        case WM_ERASEBKGND: return 1;
++        case WM_PAINT: {
++            PAINTSTRUCT paint{};
++            HDC dc = BeginPaint(h, &paint);
++            RECT rect{}; GetClientRect(h, &rect);
++            FillRect(dc, &rect, static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
++            SetBkMode(dc, TRANSPARENT);
++            SetTextColor(dc, RGB(225, 255, 225));
++            HGDIOBJ previous = g_fps_font ? SelectObject(dc, g_fps_font) : nullptr;
++            const int padding = MulDiv(7, g_fps_dpi ? g_fps_dpi : 96, 96);
++            rect.left += padding, rect.top += padding;
++            DrawTextW(dc, g_fps_text, -1, &rect, DT_LEFT | DT_NOPREFIX);
++            if (previous) SelectObject(dc, previous);
++            EndPaint(h, &paint);
++            return 0;
++        }
++    }
++    return DefWindowProcW(h, msg, w, l);
++}
++
++static void fps_overlay_create(HWND owner) {
++    if (headless()) return;
++    const char* env = std::getenv("NX_FPS_OVERLAY");
++    g_fps_enabled = !(env && env[0] == '0');
++    WNDCLASSW wc{};
++    wc.lpfnWndProc = fps_overlay_proc;
++    wc.hInstance = GetModuleHandleW(nullptr);
++    wc.lpszClassName = L"Sp2RecompFpsOverlay";
++    RegisterClassW(&wc);
++    g_fps_window = CreateWindowExW(WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW,
++                                  wc.lpszClassName, L"Performance", WS_POPUP, 0, 0, 270, 52,
++                                  owner, nullptr, wc.hInstance, nullptr);
++    if (!g_fps_window) return;
++    SetLayeredWindowAttributes(g_fps_window, 0, 225, LWA_ALPHA);
++    SetTimer(owner, kFpsTimer, 250, nullptr);
++    fps_overlay_tick();
+ }
+ 
+ // ---- mouse look -------------------------------------------------------------------------------------------------
+@@ -352,9 +466,22 @@
+ static LRESULT CALLBACK wndproc(HWND h, UINT msg, WPARAM w, LPARAM l) {
+     switch (msg) {
+         case WM_CLOSE:
++            if (g_fps_window) ShowWindow(g_fps_window, SW_HIDE);
++            nx::nvn::save_pipeline_cache_on_exit();
+             log("window closed");
+             ExitProcess(0);
++        case WM_TIMER:
++            if (w == kFpsTimer) { fps_overlay_tick(); return 0; }
++            break;
++        case WM_MOVE: case WM_SIZE: case WM_DPICHANGED:
++            fps_overlay_position();
++            break;
+         case WM_KEYDOWN:
++            if (w == VK_F3 && !(l & (LPARAM(1) << 30))) {
++                g_fps_enabled = !g_fps_enabled;
++                fps_overlay_tick();
++                return 0;
++            }
+             if (w == VK_F11) toggle_fullscreen(h);
+             if (w == VK_F1 && GetForegroundWindow() == h && mouse_on())  // toggle mouse look without holding a button
+                 mouse_set_capture(!g_mouse_capture.load());
+@@ -405,6 +532,7 @@
+             if (g_mouse_capture.load()) mouse_set_capture(false);  // never leave the cursor hidden behind another window
+             break;
+         case WM_ACTIVATE:
++            fps_overlay_position();
+             if (LOWORD(w) == WA_INACTIVE && g_mouse_capture.load()) mouse_set_capture(false);
+             break;
+     }
+@@ -436,6 +564,7 @@
+                              std::max(0, x), std::max(0, y), w, h, nullptr, nullptr, wc.hInstance, nullptr);
+     if (const char* f = std::getenv("NX_FULLSCREEN"); f && *f == '1' && !headless()) toggle_fullscreen(g_window);
+     if (!headless()) SetForegroundWindow(g_window);
++    fps_overlay_create(g_window);
+     *ready = true;
+     MSG m;
+     while (GetMessageW(&m, nullptr, 0, 0) > 0) {
+--- a/runtime/src/frame_stats.cpp
++++ b/runtime/src/frame_stats.cpp
+@@ -163,6 +163,13 @@
+     thread_usage(faults, switches);
+ }
+ 
++static bool frame_stats_enabled() {
++    static const bool enabled=[] {
++        const char* e=std::getenv("NX_PRESENT_STATS");
++        return e && std::atoi(e)!=0;
++    }();
++    return enabled;
++}
+ void frame_thread_tick(int role) {
+     Role& r = g_roles[role & 1];
+ #if defined(__ANDROID__)
+@@ -171,9 +178,11 @@
+     const Cpus& c = cpus();
+     if (cpu >= 0 && size_t(cpu) < c.cluster.size()) r.on[std::min(c.cluster[size_t(cpu)], 3)]++;
+ #endif
++    ++r.ticks;
++    if (!frame_stats_enabled()) return;
+     uint64_t now = monotonic_ns();
+     if (!r.wall_from) r.wall_from = now, r.cpu_from = thread_cpu_ns(), thread_usage(r.faults_from, r.switches_from);
+-    if (++r.ticks % 600) return;
++    if (r.ticks % 600) return;
+     uint64_t cpu_ns = thread_cpu_ns();
+     long faults[2], switches[2];
+     thread_usage(faults, switches);
+@@ -196,6 +205,7 @@
+ 
+ void frame_presented() {
+     frame_thread_tick(0);
++    if (!frame_stats_enabled()) return;
+     static uint64_t last = 0, n = 0, bins[7] = {};
+     uint64_t now = monotonic_ns();
+     if (last) {

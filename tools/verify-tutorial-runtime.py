@@ -30,7 +30,15 @@ def main():
         ('test_zero_texture_upload.py', 'runtime/src/nvn/nvn_pipeline.cpp'),
         ('test_native_depth_tolerance.py', 'runtime/src/nvn/nvn_raster.cpp'),
         ('test_draw_trace_fastpath.py', 'runtime/src/nvn/nvn_draw_trace.cpp'),
+        ('test_frame_stats_gate.py', 'runtime/src/frame_stats.cpp'),
+        ('test_present_pacing_stats.py', 'runtime/src/nvn/nvn_queue.cpp'),
+        ('test_pipeline_cache_persistence.py', 'runtime/src/nvn/nvn_pipeline_cache.cpp'),
+        ('test_pipeline_lru.py', 'runtime/src/nvn/pipeline_lru.h'),
+        ('test_pipeline_key_padding.py', 'runtime/src/nvn/nvn_pipeline.cpp'),
+        ('test_frame_time_capture.py', 'runtime/src/nvn/nvn_vk.cpp'),
+        ('test_fps_overlay.py', 'runtime/src/platform_win.cpp'),
         ('test_mouse_movement.py', 'runtime/src/platform_win.cpp'),
+        ('test_mouse_gyro.py', 'runtime/src/mouse_gyro.h'),
         ('test_unit_point.py', None),
     ]
     for _, source in tests:
