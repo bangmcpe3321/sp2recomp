@@ -2,15 +2,29 @@
 
 **English** · [Tiếng Việt](README_vi.md)
 
-Reverse-engineering research notes and tooling for the Nintendo Switch executable
-`main` of **Splatoon 2** (USA), whose ExeFS lives in the `Splatoon 2 USA.xci` dump,
-plus a recompiled PC port of that executable.
+A native PC **recompilation of Splatoon 2** (USA) for Windows with Vulkan.
+The original game's AArch64 code is recompiled to x86-64 and connected to a PC
+runtime for graphics, input and platform services.
 
-This is a research log, not a finished decompilation. It records what has been
-established about the module's structure, architecture and subsystems, the scripts
-used to establish it, and how far the port has got.
+The recompilation is in development. This repository contains runtime patches,
+build and verification tools, and research notes supporting the port. The sections
+below record verified behavior, current limitations and the original executable's
+structure.
 
 ## Current state
+
+### Native Switch Pro input and gameplay options - November 24, 2026
+
+The Windows runtime now reads native Switch Pro Controller buttons, sticks and
+physical gyro through SDL3 HIDAPI. A connected Bluetooth controller supplied a
+verified 200 Hz motion stream; in-game aiming still needs a manual check.
+
+Two separate options implement the supplied US 1.0.0 patches: plaza 60 FPS and
+disabled dynamic resolution. Build ID and original instructions match; both
+options default off and have reversible source helpers and separate launchers.
+Octo Expansion credits are outside this US 1.0.0 patch's scope, and stable 60 FPS
+is not claimed. All 32 runtime regression groups pass. See
+[behavior, validation and rollback](docs/CONTROLLER_GAMEPLAY_OPTIONS.md).
 
 ### Bulk shader-cache build - November 24, 2026
 
@@ -126,7 +140,8 @@ checked again with this build.
 *Actual Windows runtime output, with the tutorial's aiming instructions visible.
 Remaining banding/speckle is not declared fixed. This is not proof of completing
 the tutorial. That November 21 build did not add mouse-to-gyro input; see the
-November 23 update above for the new mouse mapping. Physical gyro is not added.*
+November 23 update above for mouse mapping and the November 24 update for native
+Switch Pro physical gyro.*
 
 See [the fixes, measured checks and limitations](docs/TUTORIAL_LIGHTING.md), the
 [apply/restore helper](tools/patches/patch-tutorial-lighting-sixaxis.py),
@@ -432,7 +447,7 @@ Open:
 - Engine and middleware: [ENGINE_RECONSTRUCTION.md](doc/ENGINE_RECONSTRUCTION.md), [SEAD_COVERAGE.md](doc/SEAD_COVERAGE.md), [NNWARE_COVERAGE.md](doc/NNWARE_COVERAGE.md), [AGL_COVERAGE.md](doc/AGL_COVERAGE.md)
 - `sdk` module: [SDK_ANALYSIS.md](doc/SDK_ANALYSIS.md), [SDK_REFERENCE.md](doc/SDK_REFERENCE.md)
 - Layout verification: [VERIFICATION.md](doc/VERIFICATION.md), [VTABLE_VERIFICATION.md](doc/VTABLE_VERIFICATION.md)
-- Tooling and decompilation route: [DECOMPILATION_UNBLOCKED.md](doc/DECOMPILATION_UNBLOCKED.md), [DECOMPILED_BODIES.md](doc/DECOMPILED_BODIES.md)
+- Static-analysis tool history: [DECOMPILATION_UNBLOCKED.md](doc/DECOMPILATION_UNBLOCKED.md), [DECOMPILED_BODIES.md](doc/DECOMPILED_BODIES.md)
 - Wider ecosystem survey: [ECOSYSTEM.md](doc/ECOSYSTEM.md), [subsystem-map.txt](subsystem-map.txt)
 
 ## In this document
@@ -455,12 +470,11 @@ Open:
 | Function/symbol inventory | Done (113,150 functions) |
 | Subsystem decomposition | Done (55 namespaces) |
 | Engine & middleware identification | Done |
-| **Function-body decompilation** | **Not done** — see [Limitations](#limitations) |
 | **Recompiled PC port** | Boots to the in-game UI: `RootTask::prepare_`, display loop, PlayerMake character creation, the title screen at 1920×1080, and the first-launch tutorial - [RECOMP_BOOT_TO_UI.md](doc/RECOMP_BOOT_TO_UI.md). The tutorial advances past aim/ZR with legible guide text, and the Move page's central 960×540 3D room renders. The tutorial→plaza boundary is under test: an idempotent patch redirects the tutorial's `5 → 6` to warp state 7, and the 21-state UI/page manager's real `4 → 5` handoff loads the Off the Hook news scene (the old table's state-5 entry is null because the transition creates a new page manager). The earlier `4 → 7` detour reached the gear-selection screen and stalled at null state 9; it is a diagnostic, not the plaza path. The plaza café scene and intact NPC faces are verified with the texture-copy fix; free-roaming rendering remains unverified. The news scene and its two hosts render in the central 960×540 viewport. About one boot in three stalls at the character→tutorial UI job transition. |
 
 Everything below is static analysis of the shipped binary unless a section says
 otherwise; runtime findings from the port are labelled as such. Behaviour is only
-claimed where it has been observed or decompiled.
+claimed where it has been observed or verified against the original instructions.
 
 ---
 

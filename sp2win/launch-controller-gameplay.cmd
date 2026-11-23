@@ -1,0 +1,28 @@
+@echo off
+setlocal
+cd /d "%~dp0"
+set "NX_DATA_ROOT=private"
+set "NX_MEM_LIMIT_GB=13"
+set "NX_FPS_OVERLAY=1"
+set "NX_GPU_TIMESTAMPS=0"
+set "NX_SIXAXIS=1"
+set "NX_MOUSE_GYRO=1"
+if not defined NX_SWITCH_PRO set "NX_SWITCH_PRO=1"
+if not defined NX_PLAZA_60FPS set "NX_PLAZA_60FPS=0"
+if not defined NX_DISABLE_DYNAMIC_RESOLUTION set "NX_DISABLE_DYNAMIC_RESOLUTION=0"
+set "NX_FAKE_GPU_TIME="
+set "NX_SIM_RATE_TRACE="
+set "NX_RDCAP="
+set "NX_PAINT_COLOR_TRACE="
+set "NX_INPUT="
+set "NX_INPUT_SCRIPT="
+set "NX_TUT_AIM_SKIP="
+set "NX_TUT_MOVE_SKIP="
+set "NX_TUT_SHOT_SKIP="
+set "NX_ZLZR_HOLD="
+set "NX_SIXAXIS_POSE="
+set "NX_SIXAXIS_SEEK="
+set "NX_SIXAXIS_GRID="
+set "NX_SIXAXIS_WOBBLE="
+sp2-controller-gameplay.exe %*
+if errorlevel 1 pause

@@ -1,4 +1,11 @@
-# sp2decomp
+# sp2recomp
+
+> Cập nhật 24/11/2026: đã thêm nút, cần analog và gyro thật của Switch Pro
+> Controller qua SDL3 HIDAPI. Tay cầm Bluetooth đã cung cấp luồng cảm biến 200 Hz.
+> Hai tùy chọn riêng cho bản US 1.0.0 cho phép plaza chạy ở 60 FPS và tắt độ phân
+> giải động; mặc định đều tắt. Cả 32 nhóm kiểm tra runtime đều đạt.
+> Chưa xác nhận ngắm trong game, 60 FPS ổn định hoặc phần credits Octo Expansion.
+> Xem [hướng dẫn, kiểm chứng và hoàn tác](docs/CONTROLLER_GAMEPLAY_OPTIONS.md).
 
 > Đã sửa việc bị chậm/kẹt như đứng trên mực địch dù nền hướng dẫn không có mực.
 > Người dùng đã xác nhận hết hiện tượng này. Bộ đếm GPU nay trả số mẫu thực
@@ -15,14 +22,13 @@
 
 [English](README.md) · **Tiếng Việt**
 
-Ghi chú nghiên cứu dịch ngược và công cụ cho tệp thực thi `main` trên Nintendo
-Switch của **Splatoon 2** (bản USA), có ExeFS nằm trong bản dump
-`Splatoon 2 USA.xci`, cùng với bản port PC được biên dịch lại từ tệp thực thi
-đó.
+Bản **recompilation của Splatoon 2** (USA) chạy trên PC Windows bằng Vulkan.
+Mã AArch64 gốc của trò chơi được biên dịch lại thành x86-64 và kết nối với runtime
+PC để xử lý đồ họa, input và các dịch vụ nền tảng.
 
-Đây là nhật ký nghiên cứu, không phải bản decompile hoàn chỉnh. Kho này ghi lại
-những gì đã xác lập được về cấu trúc, kiến trúc và các subsystem của module, các
-script dùng để xác lập chúng, cũng như tiến độ hiện tại của bản port.
+Bản recomp đang được phát triển. Kho này chứa các patch runtime, công cụ build
+và kiểm tra, cùng các ghi chú nghiên cứu hỗ trợ bản port. Các phần bên dưới ghi
+lại hành vi đã kiểm chứng, giới hạn hiện tại và cấu trúc tệp thực thi gốc.
 
 ## Tình trạng hiện tại
 
@@ -241,7 +247,7 @@ Sáu bản sửa đã đưa bản port từ lỗi fatal khi boot đến trạng 
 - Engine và middleware: [ENGINE_RECONSTRUCTION.md](doc/ENGINE_RECONSTRUCTION.md), [SEAD_COVERAGE.md](doc/SEAD_COVERAGE.md), [NNWARE_COVERAGE.md](doc/NNWARE_COVERAGE.md), [AGL_COVERAGE.md](doc/AGL_COVERAGE.md)
 - Module `sdk`: [SDK_ANALYSIS.md](doc/SDK_ANALYSIS.md), [SDK_REFERENCE.md](doc/SDK_REFERENCE.md)
 - Kiểm chứng layout: [VERIFICATION.md](doc/VERIFICATION.md), [VTABLE_VERIFICATION.md](doc/VTABLE_VERIFICATION.md)
-- Tooling và hướng decompile: [DECOMPILATION_UNBLOCKED.md](doc/DECOMPILATION_UNBLOCKED.md), [DECOMPILED_BODIES.md](doc/DECOMPILED_BODIES.md)
+- Lịch sử công cụ phân tích tĩnh: [DECOMPILATION_UNBLOCKED.md](doc/DECOMPILATION_UNBLOCKED.md), [DECOMPILED_BODIES.md](doc/DECOMPILED_BODIES.md)
 - Khảo sát hệ sinh thái rộng hơn: [ECOSYSTEM.md](doc/ECOSYSTEM.md), [subsystem-map.txt](subsystem-map.txt)
 
 ## Trong tài liệu này
@@ -264,12 +270,11 @@ Sáu bản sửa đã đưa bản port từ lỗi fatal khi boot đến trạng 
 | Kiểm kê hàm/symbol | Xong (113.150 hàm) |
 | Phân rã subsystem | Xong (55 namespace) |
 | Nhận dạng engine & middleware | Xong |
-| **Decompile thân hàm** | **Chưa xong** — xem [Hạn chế](#hạn-chế) |
 | **Bản port PC biên dịch lại** | Boot đến UI trong game: `RootTask::prepare_`, display loop, tạo nhân vật PlayerMake, màn hình tiêu đề 1920×1080 và tutorial lần đầu — [RECOMP_BOOT_TO_UI.md](doc/RECOMP_BOOT_TO_UI.md). Tutorial vượt qua aim/ZR với chữ hướng dẫn đọc được, còn căn phòng 3D trung tâm 960×540 của trang Move cũng render được. Ranh giới tutorial → plaza đang được kiểm tra: patch idempotent chuyển `5 → 6` của tutorial sang warp state 7, còn handoff thực tế `4 → 5` của UI/page manager 21 trạng thái load scene tin tức Off the Hook (entry state 5 của bảng cũ là null vì chuyển tiếp tạo page manager mới). Đường vòng `4 → 7` trước đây đến màn hình chọn gear rồi dừng tại state 9 null; đó là đường chẩn đoán, không phải đường đến plaza. Plaza 3D vẫn chưa được xác nhận; scene tin tức và hai host render trong viewport trung tâm 960×540. Khoảng một phần ba số lần boot bị dừng ở chuyển tiếp UI job nhân vật → tutorial. |
 
 Mọi nội dung bên dưới là phân tích tĩnh binary đã phát hành, trừ khi một mục ghi rõ
 khác đi; các phát hiện runtime từ bản port được đánh dấu tương ứng. Chỉ khẳng
-định hành vi khi đã quan sát hoặc decompile được.
+định hành vi khi đã quan sát hoặc kiểm chứng với lệnh máy gốc.
 
 ## Mục tiêu
 

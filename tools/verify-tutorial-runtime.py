@@ -17,6 +17,10 @@ def main():
     if not shutil.which('g++'):
         parser.error('g++ with C++20, AddressSanitizer and UndefinedBehaviorSanitizer is required')
     tests = [
+        ('test_gameplay_options.py', 'runtime/src/sp2_gameplay_options.h'),
+        ('test_switch_pro_lifecycle.py', 'runtime/src/switch_pro_win.h'),
+        ('test_switch_pro_mapping.py', 'runtime/src/switch_pro_mapping.h'),
+        ('test_controller_motion.py', 'runtime/src/controller_motion.h'),
         ('test_submit_wait_safety.py', 'runtime/src/nvn/nvn_queue.cpp'),
         ('test_scalable_font_missing_fallback.py', 'gen/main/code_417.cpp'),
         ('test_tutorial_sixaxis.py', 'runtime/src/hle_hid.cpp'),

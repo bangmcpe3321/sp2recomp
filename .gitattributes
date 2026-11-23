@@ -9,3 +9,4 @@
 tools/patches/playermake-descriptor-winding.patch whitespace=-blank-at-eol
 tools/patches/tutorial-lighting-sixaxis.patch whitespace=-blank-at-eol
 tools/patches/sampler-copies-mouse.patch whitespace=-blank-at-eol
+tools/patches/switch-pro-controller.patch whitespace=-blank-at-eol
