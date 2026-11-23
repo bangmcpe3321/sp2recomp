@@ -1,0 +1,247 @@
+--- a/runtime/src/nvn/nvn_pipeline.cpp
++++ b/runtime/src/nvn/nvn_pipeline.cpp
+@@ -988,14 +988,17 @@
+ 
+ bool sampled_ready(uint64_t texture) {
+     Texture* t = get<Texture>(texture);
+-    if (!t || !t->image) return g_not_ready[0]++, false;  // no image yet (missing textures are the caller's)
++    // Registered descriptors may borrow an image owned by image_of's storage cache.
++    // Their metadata deliberately does not keep a strong image reference.
++    GpuImage* image = t ? image_of(texture) : nullptr;
++    if (!image) return g_not_ready[0]++, false;
+     // Before the dirty test below, and therefore before gather_textures decides on kNeedBreak: this is the fix for
+     // the in-pass upload (docs/IN_PASS_UPLOAD.md). Per frame, with a full content hash, as it was.
+-    check_atlas_content(*t, texture);
+-    check_linear_content(*t);
+-    if (t->dirty && !t->image->rendered) return g_not_ready[1]++, false;
++    check_atlas_content(*t, texture, *image);
++    check_linear_content(*t, *image);
++    if (t->dirty && !image->rendered) return g_not_ready[1]++, false;
+     if (t->has_writes.load(std::memory_order_acquire)) return g_not_ready[2]++, false;  // no lock (nvn.h)
+-    const GpuImage& img = *t->image;
++    const GpuImage& img = *image;
+     bool ok = img.rendered ? img.layout == VK_IMAGE_LAYOUT_GENERAL
+                            : img.uploaded && img.layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+     if (!ok) g_not_ready[img.rendered ? 3 : !img.uploaded ? 4 : 5]++;
+@@ -1046,12 +1049,12 @@
+ // from sampled_ready() instead, the flag is set BEFORE kNeedBreak is computed (nvn_sets.cpp gather_textures), the
+ // existing draw_end_rendering closes the pass, and the very same upload runs legally in the gap. Nothing is deleted
+ // and no layout is skipped: only the placement changes.
+-void check_atlas_content(Texture& t, uint64_t guest) {
++void check_atlas_content(Texture& t, uint64_t guest, const GpuImage& image) {
+     static const bool atlas_refresh = [] {  // on by default; NX_ATLAS_REFRESH=0 turns it off
+         const char* e = std::getenv("NX_ATLAS_REFRESH");
+         return e == nullptr || std::atoi(e) != 0;
+     }();
+-    GpuImage* img = t.image.get();
++    const GpuImage* img = &image;
+     if (!atlas_refresh || !img || !img->alpha_from_r || !img->uploaded || img->rendered || !t.memory || !t.storage_size)
+         return;
+     // One signature map for the whole runtime (under atlas_lock, below): a second copy would let the two disagree
+@@ -1125,31 +1128,9 @@
+                 img->content = word != 0;
+             }
+         }
+-        // PATCH-EMPTY-OPAQUE: the upload carried no data. A coverage mask of zeros makes a shader's
+-        // `alpha * vertexFactor < 0.5 -> Kill()` discard the whole mesh (measured on PlayerMake: the
+-        // character atlas is 512x256 RGBA8, alpha 0 in all 10 mips, every body fragment discarded).
+-        // NX_EMPTY_OPAQUE_ALPHA=0 bisects. NX_FILL_TRACE=1 reports the condition's terms.
+-        static const char* ft = std::getenv("NX_FILL_TRACE");
+-        if (ft && img->aspect == VK_IMAGE_ASPECT_COLOR_BIT) {
+-            static std::set<std::string> seen;
+-            char key[96];
+-            std::snprintf(key, sizeof key, "%ux%u/f%u", img->width, img->height, unsigned(t->format));
+-            if (seen.insert(key).second)
+-                log("FILLTRACE %s: content=%d rendered=%d texels=%d uploaded=%d flags=%#x",
+-                    key, int(img->content), int(img->rendered), int(img->texels), int(img->uploaded),
+-                    unsigned(t->flags));
+-        }
+-        static const char* eo_env = std::getenv("NX_EMPTY_OPAQUE_ALPHA");
+-        static const bool empty_opaque = !(eo_env && std::strcmp(eo_env, "0") == 0);
+-        if (empty_opaque && !img->content && !img->rendered &&
+-            img->aspect == VK_IMAGE_ASPECT_COLOR_BIT) {
+-            static uint64_t n = 0;
+-            if (n++ < 20)
+-                log("nvn: no-data texture %ux%u fmt %#x: filled opaque so a cutout mask does not "
+-                    "erase the mesh (%llu so far)", img->width, img->height, unsigned(t->format),
+-                    (unsigned long long)n);
+-            fill_image_opaque(cb, *img);
+-        }
++        // Zero is valid texture data, including black lighting/emission maps and empty masks.
++        // Preserve the uploaded channels. Missing atlas copies are handled by retaining the
++        // copy command's descriptors, not by replacing zero texels with opaque white.
+     }
+     apply_texel_writes(cb, *t, *img);
+     if (img->layout == VK_IMAGE_LAYOUT_UNDEFINED) {  // never written: black, not garbage
+--- a/runtime/src/nvn/nvn_pipeline.h
++++ b/runtime/src/nvn/nvn_pipeline.h
+@@ -159,14 +159,12 @@
+ void readback_linear_texture(VkCommandBuffer cb, const Texture& t, GpuImage& img, std::vector<WriteBack>& writes);
+ // Every level and layer to zero (colour; magenta with `magenta`), depth and stencil to 0. Leaves TRANSFER_DST.
+ void clear_image(VkCommandBuffer cb, GpuImage& img, bool magenta = false);
+-// PATCH-EMPTY-OPAQUE: every level and layer to opaque (1,1,1,1).
+-void fill_image_opaque(VkCommandBuffer cb, GpuImage& img);
+ // A single level and layer of an image, for rendering to.
+ void sampled_ready_log();
+-void check_linear_content(Texture& t);  // nvn_sampler.cpp
++void check_linear_content(Texture& t, const GpuImage& image);  // nvn_sampler.cpp
+ // nvn_pipeline.cpp: NX-ATLAS-REFRESH's per-frame content check, which must run BEFORE a draw decides whether the
+ // open pass has to close (docs/IN_PASS_UPLOAD.md).
+-void check_atlas_content(Texture& t, uint64_t guest);
++void check_atlas_content(Texture& t, uint64_t guest, const GpuImage& image);
+ VkImageView attachment_view(GpuImage& img, uint32_t level, uint32_t layer, VkFormat format = VK_FORMAT_UNDEFINED);
+ // The Vulkan format of a view with NVN format `nvn` (0: the image's own) of `img`: the image's when the view's is not
+ // a same-size colour format it can be viewed as.
+--- a/runtime/src/nvn/nvn_sampler.cpp
++++ b/runtime/src/nvn/nvn_sampler.cpp
+@@ -79,7 +79,7 @@
+ }
+ 
+ // A pitch-linear texture the GPU does not write: did the CPU change it since the last upload?
+-void check_linear_content(Texture& t) {
++void check_linear_content(Texture& t, const GpuImage& image) {
+     // Every 4th presented frame at most (every 4th submit was about every frame, ~1 ms); a new glyph shows 3 frames late.
+     uint64_t frame = g_frame.load(std::memory_order_relaxed) + 1;
+     static const uint64_t hash_small = [] {
+@@ -87,7 +87,7 @@
+         return e ? std::strtoull(e, nullptr, 10) : 0;
+     }();
+     bool small = hash_small && t.storage_size <= hash_small;
+-    if ((!t.stride && !small) || !t.memory || !t.image || t.image->rendered ||
++    if ((!t.stride && !small) || !t.memory || image.rendered ||
+         (t.hashed_submit && t.hashed_submit + (t.watched ? 1 : 4) > frame))
+         return;
+     t.hashed_submit = frame;
+--- a/runtime/src/nvn/nvn_spirv_patch.cpp
++++ b/runtime/src/nvn/nvn_spirv_patch.cpp
+@@ -589,6 +589,84 @@
+     return true;
+ }
+ 
++
++// Preserve sine's small nonzero value near +/-pi. Native approximate sine can
++// round these arguments to zero; area-light shaders then take its reciprocal.
++// Reduce around a split pi before evaluating sine, without changing other inputs.
++static bool stable_sine_near_pi(const std::vector<uint32_t>& in, std::vector<uint32_t>& out) {
++    if (in.size() < 5 || in[0] != 0x07230203 || !in[3] || in[3] > 10000000) return false;
++    uint32_t glsl = 0, boolean = 0, scalar = 0, functions = 0;
++    bool in_function = false;
++    std::set<uint32_t> floats;
++    for (size_t i = 5; i < in.size();) {
++        uint32_t n = in[i] >> 16, op = in[i] & 0xffff;
++        if (!n || n > in.size() - i) return false;
++        const uint32_t* w = &in[i];
++        if (op == 11 && n >= 6 && std::memcmp(w + 2, "GLSL.std.450\0", 13) == 0) glsl = w[1];
++        if (op == 54) { if (in_function) return false; in_function = true; functions++; }
++        if (op == 56) { if (!in_function) return false; in_function = false; }
++        if (op == 20 && n == 2) boolean = w[1];
++        if (op == 22 && n == 3 && w[2] == 32) floats.insert(w[1]);
++        i += n;
++    }
++    if (!glsl || in_function || !functions) return false;
++    uint32_t count = 0;
++    for (size_t i = 5; i < in.size(); i += in[i] >> 16) {
++        const uint32_t* w = &in[i];
++        if ((w[0] & 0xffff) == 12 && (w[0] >> 16) == 6 && w[3] == glsl && w[4] == 13 && floats.count(w[1])) {
++            if (scalar && scalar != w[1]) return false;
++            scalar = w[1]; count++;
++        }
++    }
++    if (!count || uint64_t(in[3]) + 10ull * count + 5 > UINT32_MAX) return false;
++    uint32_t next = in[3];
++    auto id = [&]() { return next++; };
++    std::vector<uint32_t> declarations, decorations, body;
++    if (!boolean) { boolean = id(); declarations.insert(declarations.end(), {2u << 16 | 20, boolean}); }
++    uint32_t constants[4];
++    // pi_hi + pi_lo approximates mathematical pi much more closely than one float.
++    const float values[4] = {3.1415927410125732f, -8.742277657347586e-8f, 0.001f, 0.0f};
++    for (unsigned k = 0; k < 4; k++) {
++        uint32_t bits; std::memcpy(&bits, &values[k], sizeof bits);
++        constants[k] = id();
++        declarations.insert(declarations.end(), {4u << 16 | 43, scalar, constants[k], bits});
++    }
++    for (size_t i = 5; i < in.size(); i += in[i] >> 16) {
++        const uint32_t* w = &in[i]; uint32_t n = w[0] >> 16;
++        if ((w[0] & 0xffff) != 12 || n != 6 || w[3] != glsl || w[4] != 13 || w[1] != scalar) {
++            body.insert(body.end(), w, w + n); continue;
++        }
++        uint32_t a = id(), d = id(), ad = id(), close_pi = id(), r = id(), s = id(), neg = id(), negative = id(), signed_s = id(), original = id();
++        body.insert(body.end(), {
++            6u << 16 | 12, scalar, a, glsl, 4, w[5], // abs(x)
++            5u << 16 | 131, scalar, d, a, constants[0],
++            6u << 16 | 12, scalar, ad, glsl, 4, d,
++            5u << 16 | 184, boolean, close_pi, ad, constants[2],
++            5u << 16 | 131, scalar, r, d, constants[1],
++            6u << 16 | 12, scalar, s, glsl, 13, r,
++            4u << 16 | 127, scalar, neg, s,
++            5u << 16 | 184, boolean, negative, w[5], constants[3],
++            6u << 16 | 169, scalar, signed_s, negative, s, neg,
++            6u << 16 | 12, scalar, original, glsl, 13, w[5],
++            6u << 16 | 169, scalar, w[2], close_pi, signed_s, original});
++        decorations.insert(decorations.end(), {3u << 16 | 71, d, 42, 3u << 16 | 71, r, 42}); // NoContraction
++    }
++    std::vector<uint32_t> result(in.begin(), in.begin() + 5);
++    bool annotated = false, declared = false;
++    for (size_t i = 0; i < body.size(); i += body[i] >> 16) {
++        uint32_t n = body[i] >> 16, op = body[i] & 0xffff;
++        if (!annotated && op >= 19 && op <= 39) {
++            result.insert(result.end(), decorations.begin(), decorations.end()); annotated = true;
++        }
++        if (!declared && op == 54) {
++            result.insert(result.end(), declarations.begin(), declarations.end()); declared = true;
++        }
++        result.insert(result.end(), body.begin() + i, body.begin() + i + n);
++    }
++    if (!annotated || !declared) return false;
++    result[3] = next; out = std::move(result); return true;
++}
++
+ std::vector<uint32_t> patched_spirv(const ShaderInfo* s, const uint8_t* kinds, uint32_t unwritten, bool* int_inputs) {
+     std::vector<uint32_t> code = s->spirv, next;  // each pass reads `code` and leaves its result in `next`
+     bool is_int = kinds && patch_int_inputs(code, kinds, next);
+@@ -605,6 +683,7 @@
+         log("nvn/vk: shader %s: inputs %#x not written by the vertex stage%s", s->hash.c_str(), unwritten,
+             ok ? " read (0, 0, 0, 1)" : ", left as they are");
+     }
++    if (stable_sine_near_pi(code, next)) code.swap(next);
+     if (clamp_uniform_indices(code, next, nullptr)) code.swap(next);
+     if (strip_dead_per_vertex_members(code, next)) code.swap(next);
+     return code;
+--- a/runtime/src/nvn/nvn_upload.cpp
++++ b/runtime/src/nvn/nvn_upload.cpp
+@@ -176,17 +176,6 @@
+         VkClearDepthStencilValue v{1.0f, 0};  // far: the course passes test LESS
+         p_vkCmdClearDepthStencilImage(cb, img.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &v, 1, &r);
+     }
+-}
+-
+-// PATCH-EMPTY-OPAQUE: fill an image with opaque texels. Used when an upload carried no data, so a
+-// shader's `alpha < 0.5 -> discard` cutout does not erase the mesh that samples it.
+-void fill_image_opaque(VkCommandBuffer cb, GpuImage& img) {
+-    if (img.aspect != VK_IMAGE_ASPECT_COLOR_BIT || compressed_format(img.format)) return;
+-    transition(cb, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+-    VkImageSubresourceRange r{img.aspect, 0, img.levels, 0, img.layers};
+-    VkClearColorValue v{};
+-    v.float32[0] = v.float32[1] = v.float32[2] = v.float32[3] = 1.0f;
+-    p_vkCmdClearColorImage(cb, img.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &v, 1, &r);
+ }
+ 
+ void upload_texture(VkCommandBuffer cb, const Texture& t, GpuImage& img, uint64_t lo, uint64_t hi) {
+--- a/runtime/src/nvn/nvn_raster.cpp
++++ b/runtime/src/nvn/nvn_raster.cpp
+@@ -56,7 +56,14 @@
+ namespace {
+ float equal_slack_units() {
+     static const char* env = std::getenv("NX_EQUAL_SLACK");
+-    static const float units = env ? float(std::atof(env)) : 4.0f;
++    // The tolerance compensates separately compiled Metal depth passes. On native
++    // Vulkan, it also moves the face color pass in front of nearby eyebrow geometry.
++#if defined(__APPLE__)
++    constexpr float default_units = 4.0f;
++#else
++    constexpr float default_units = 0.0f;
++#endif
++    static const float units = env ? float(std::atof(env)) : default_units;
+     return units;
+ }
+ }  // namespace

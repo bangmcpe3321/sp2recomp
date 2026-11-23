@@ -12,6 +12,24 @@ used to establish it, and how far the port has got.
 
 ## Current state
 
+
+### Plaza/news rendering follow-up — November 23, 2026
+
+Valid black textures now retain their contents, restoring shading across the
+square and news studio. Cache-owned glyph atlases refresh correctly, and a scalar
+sine precision fix removes the measured area-light stippling. Native Vulkan no
+longer applies the extra Metal depth tolerance that let the face overwrite nearby
+eyebrows. See [evidence, scope and application](docs/PLAZA_NEWS_RENDERING.md), the
+[apply/restore helper](tools/patches/patch-plaza-news-rendering.py), and
+[14 runtime sanitizer checks](tools/verify-tutorial-runtime.py).
+
+Black story-mode trees, balloons and crates were traced separately to missing
+shader-cache stages. The local cache has been rebuilt and validated; game-derived
+shader files are not distributed here.
+
+![News rendering after the texture-content and precision fixes](docs/images/news-rendering-verified.png)
+
+
 ### Plaza Inkling faces — November 22, 2026
 
 Copied texture descriptors were also being dropped by texture-to-texture copies,

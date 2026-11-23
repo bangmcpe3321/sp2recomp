@@ -25,6 +25,10 @@ def main():
         ('test_integer_shader_io.py', 'runtime/src/nvn/nvn_spirv_patch.cpp'),
         ('test_sampler_copies.py', 'runtime/src/nvn/nvn_sampler_objects.cpp'),
         ('test_texture_copies.py', 'runtime/src/nvn/nvn_copy.cpp'),
+        ('test_cache_texture_readiness.py', 'runtime/src/nvn/nvn_pipeline.cpp'),
+        ('test_stable_sine.py', 'runtime/src/nvn/nvn_spirv_patch.cpp'),
+        ('test_zero_texture_upload.py', 'runtime/src/nvn/nvn_pipeline.cpp'),
+        ('test_native_depth_tolerance.py', 'runtime/src/nvn/nvn_raster.cpp'),
         ('test_mouse_movement.py', 'runtime/src/platform_win.cpp'),
         ('test_unit_point.py', None),
     ]
