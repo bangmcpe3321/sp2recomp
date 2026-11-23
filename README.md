@@ -12,6 +12,15 @@ used to establish it, and how far the port has got.
 
 ## Current state
 
+### Plaza transition safety follow-up - November 23, 2026
+
+A missing font fallback no longer causes the observed null glyph read. Resource
+waits also retain live rendering data until submission completion, instead of
+releasing it after two seconds. See [the crash evidence, patches and limits](docs/PLAZA_TRANSITION_SAFETY.md)
+and [28 regression groups](tools/verify-tutorial-runtime.py). Live transition
+verification remains open.
+
+
 ### False enemy-ink detection fixed - November 23, 2026
 
 Standing on bare tutorial ground no longer triggers the reported enemy-ink

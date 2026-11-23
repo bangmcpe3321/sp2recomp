@@ -1,0 +1,244 @@
+--- a/runtime/src/nvn/nvn_queue.cpp
++++ b/runtime/src/nvn/nvn_queue.cpp
+@@ -16,6 +16,7 @@
+ #include <string>
+ #include <atomic>
+ #include <vector>
++#include <set>
+ 
+ #include "nvn.h"
+ #include "platform.h"
+@@ -33,17 +34,22 @@
+ std::mutex g_sub_lock;
+ std::condition_variable g_sub_cv;
+ uint64_t g_sub_called = 0, g_sub_done = 0;
++std::set<uint64_t> g_sub_finished;  // concurrent callers may finish out of ticket order
++thread_local uint64_t g_replay_seq = 0;
+ std::atomic<uint64_t> g_sub_blocked{0};
++using WaitClock = std::chrono::steady_clock;
++using WaitDeadline = WaitClock::time_point;
+ 
+ bool sync_loose() {
+     static const bool on = std::getenv("NX_SYNC_LOOSE") != nullptr;
+     return on;
+ }
+ 
+-void submit_done() {
++void submit_done(uint64_t seq) {
+     {
+         std::lock_guard lk(g_sub_lock);
+-        g_sub_done++;
++        g_sub_finished.insert(seq);
++        while (g_sub_finished.erase(g_sub_done + 1)) ++g_sub_done;
+     }
+     g_sub_cv.notify_all();
+ }
+@@ -56,21 +62,35 @@
+ };
+ WaitSite g_wait_sites[kWaitSites] = {{"sync wait"}, {"queue finish"}, {"pool invalidate"}, {"pool finalize"}};
+ 
+-// Waits until the submits up to `seq` were replayed (2 s at most: a hung replay is logged, not waited forever).
+-void wait_submits(uint64_t seq, int site) {
+-    if (sync_loose() || !seq) return;
++// Two seconds is a diagnostic interval, never permission to reuse/free live guest memory.
++// Only SyncWait has a guest deadline; finish and pool operations require actual completion.
++bool wait_submits(uint64_t seq, int site, WaitDeadline deadline = WaitDeadline::max()) {
++    if (sync_loose() || !seq) return true;
+     WaitSite& w = g_wait_sites[site];
+     w.calls++;
+     std::unique_lock lk(g_sub_lock);
+-    if (g_sub_done >= seq) return;
++    if (g_sub_done >= seq) return true;
++    if (g_replay_seq && seq >= g_replay_seq) {
++        log("nvn: reentrant CPU wait for submit %llu from replay %llu", (unsigned long long)seq,
++            (unsigned long long)g_replay_seq);
++        if (deadline != WaitDeadline::max()) return false;
++        // Waiting for our own replay cannot complete. Stop before a pool can be destroyed under it.
++        std::abort();
++    }
+     uint64_t n = ++g_sub_blocked;
+     if (n == 1 || n % 1000 == 0) log("nvn: %llu CPU waits blocked on a submit still being replayed", (unsigned long long)n);
+     uint64_t t0 = plat::monotonic_ns();
+-    if (!g_sub_cv.wait_for(lk, std::chrono::seconds(2), [seq] { return g_sub_done >= seq; }))
+-        log("nvn: a CPU wait gave up after 2 s on submit %llu (%llu done)", (unsigned long long)seq,
++    bool ready = false;
++    for (;;) {
++        auto diagnostic = WaitClock::now() + std::chrono::seconds(2);
++        if ((ready = g_sub_cv.wait_until(lk, std::min(deadline, diagnostic), [seq] { return g_sub_done >= seq; }))) break;
++        if (WaitClock::now() >= deadline) break;
++        log("nvn: CPU still waiting on submit %llu (%llu done); resources remain in use", (unsigned long long)seq,
+             (unsigned long long)g_sub_done);
++    }
+     uint64_t dt = plat::monotonic_ns() - t0;
+     w.blocked++, w.ns += dt, w.frame_ns += dt;
++    return ready;
+ }
+ 
+ void log_wait_sites() {
+@@ -97,11 +117,13 @@
+ 
+ // ---- syncs ------------------------------------------------------------------------------------------------------
+ 
++struct Fence {
++    uint64_t seq = 0, serial = 0;
++    bool captured = false;  // all fields protected by g_sub_lock
++};
+ struct Sync : Object {
+-    std::atomic<bool> signaled{false};
+-    std::atomic<uint64_t> serial{0};  // NX_ASYNC_GPU: the submit it waits for (0: none; always 0 otherwise)
+-    std::atomic<uint64_t> job{0};     // the replay-thread job that fences it (0: none)
+-    std::atomic<uint64_t> seq{0};     // the submits it follows (wait_submits); 0: none
++    // Jobs retain their own fence, so finalizing/reusing the guest sync cannot signal a different fence.
++    std::shared_ptr<Fence> fence;  // protected by g_sub_lock
+ };
+ 
+ void SyncInitialize(CPU& c) {  // NVNboolean (NVNsync*, NVNdevice*)
+@@ -112,17 +134,54 @@
+ void SyncFinalize(CPU& c) { destroy(c.x[0]); }
+ 
+ void signal_sync(uint64_t guest) {
+-    if (auto* s = get<Sync>(guest)) s->serial = 0, s->job = 0, s->seq = 0, s->signaled = true;
+-}
+-
+-// NVNsyncWaitResult (const NVNsync*, u64 timeout). Always 0 (already signaled), as before: a fenced submit is waited
+-// for whatever the timeout, 2 s at most (then the GPU hung and the process ends). Correct results before latency.
++    if (auto* s = get<Sync>(guest)) {
++        auto fence = std::make_shared<Fence>();
++        fence->captured = true;
++        std::lock_guard lk(g_sub_lock);
++        s->fence = std::move(fence);
++    }
++}
++
++// NVNsyncWaitResult: already signaled=0, condition satisfied=1, timeout=2, failed=3.
++// Timeout is nanoseconds; UINT64_MAX means forever. One deadline covers replay, fence capture and GPU retirement.
+ void SyncWait(CPU& c) {
+     auto* s = get<Sync>(c.x[0]);
+-    if (s) wait_submits(s->seq.load(), kWaitSync);
+-    if (s) worker_wait(s->job);
+-    if (uint64_t serial = s ? s->serial.load() : 0) gpu_wait(serial);
+-    c.x[0] = 0;
++    std::shared_ptr<Fence> fence;
++    {
++        std::lock_guard lk(g_sub_lock);
++        if (s) fence = s->fence;
++    }
++    if (!fence) { c.x[0] = 3; return; }
++    const uint64_t timeout = c.x[1];
++    const auto start = WaitClock::now();
++    auto deadline = WaitDeadline::max();
++    if (timeout != UINT64_MAX) {
++        const auto room = std::chrono::duration_cast<std::chrono::nanoseconds>(deadline - start).count();
++        if (timeout < uint64_t(room)) deadline = start + std::chrono::nanoseconds(timeout);
++    }
++    uint64_t serial = 0;
++    auto replay_ready = [&] {
++        std::lock_guard lk(g_sub_lock);
++        serial = fence->serial;
++        return fence->captured && (sync_loose() || g_sub_done >= fence->seq);
++    };
++    if (replay_ready() && gpu_poll(serial)) { c.x[0] = 0; return; }
++    if (!timeout || !wait_submits(fence->seq, kWaitSync, deadline)) { c.x[0] = 2; return; }
++    {
++        std::unique_lock lk(g_sub_lock);
++        if (!g_sub_cv.wait_until(lk, deadline, [&] { return fence->captured; })) { c.x[0] = 2; return; }
++        serial = fence->serial;
++    }
++    if (deadline == WaitDeadline::max()) {
++        gpu_wait(serial);
++    } else {
++        while (!gpu_poll(serial)) {
++            std::unique_lock lk(g_sub_lock);
++            if (WaitClock::now() >= deadline) { c.x[0] = 2; return; }
++            g_sub_cv.wait_until(lk, std::min(deadline, WaitClock::now() + std::chrono::milliseconds(1)));
++        }
++    }
++    c.x[0] = 1;
+ }
+ 
+ // ---- queues -----------------------------------------------------------------------------------------------------
+@@ -153,13 +212,17 @@
+     // NX_DEFERRED_SNAPSHOT=1: read the Deferred arrays here; by default they are read when the submit is replayed.
+     static const bool snap = std::getenv("NX_DEFERRED_SNAPSHOT") != nullptr;
+     auto deferred = snap ? std::make_shared<const DeferredValues>(deferred_snapshot(lists)) : nullptr;
++    uint64_t seq;
+     {
+         std::lock_guard lk(g_sub_lock);
+-        g_sub_called++;
+-    }
+-    worker_run([lists = std::move(lists), deferred] {
++        seq = ++g_sub_called;
++    }
++    worker_run([lists = std::move(lists), deferred, seq] {
++        const uint64_t previous = g_replay_seq;
++        g_replay_seq = previous ? std::min(previous, seq) : seq;
+         gpu_submit(lists, deferred);
+-        submit_done();
++        g_replay_seq = previous;
++        submit_done(seq);
+     });
+ }
+ void QueueFlush(CPU&) {}
+@@ -172,10 +235,19 @@
+ void QueueFenceSync(CPU& c) {
+     uint64_t guest = c.x[1];  // the fence goes after the work queued so far: its serial is taken on the replay thread
+     if (auto* s = get<Sync>(guest)) {
+-        s->signaled = true;
+-        s->seq = submits_called();
+-        s->job = worker_run([guest] {
+-            if (auto* s = get<Sync>(guest)) s->serial = gpu_serial();
++        auto fence = std::make_shared<Fence>();
++        {
++            std::lock_guard lk(g_sub_lock);
++            fence->seq = g_sub_called;
++            s->fence = fence;
++        }
++        worker_run([fence] {
++            {
++                std::lock_guard lk(g_sub_lock);
++                fence->serial = gpu_serial();
++                fence->captured = true;
++            }
++            g_sub_cv.notify_all();
+         });
+     }
+ }
+--- a/runtime/src/nvn/nvn_frames.cpp
++++ b/runtime/src/nvn/nvn_frames.cpp
+@@ -600,6 +600,26 @@
+ uint64_t gpu_serial() { return async_gpu() && !pipelined() ? g_submitted.load() : 0; }
+ uint64_t gpu_write_back_serial() { return async_gpu() && !pipelined() ? g_barrier.load() : 0; }
+ 
++// Retire only submissions whose fences are already signaled. A zero-timeout
++// NVN sync query must never wait on an unfinished GPU fence or GPU-lock owner.
++bool gpu_poll(uint64_t serial) {
++    if (!serial || g_completed >= serial) return true;
++    std::unique_lock lock(gpu_lock(),std::try_to_lock);
++    if (!lock.owns_lock()) return false;
++    while (g_completed < serial) {
++        Slot* oldest=nullptr;
++        for (uint32_t k=0;k<g_slot_count;k++)
++            if (g_slots[k].serial && (!oldest || g_slots[k].serial<oldest->serial)) oldest=&g_slots[k];
++        if (!oldest) return false;
++        VkFence fences[kMaxParts];
++        const uint32_t count=queued_fences(*oldest,kMaxParts,fences);
++        for (uint32_t k=0;k<count;k++)
++            if (p_vkGetFenceStatus(vk_device(),fences[k])!=VK_SUCCESS) return false;
++        if (!retire_oldest()) return false;
++    }
++    return true;
++}
++
+ bool gpu_wait(uint64_t serial) {
+     if (!serial || pipelined() || g_completed >= serial) return false;
+     uint64_t t0 = plat::monotonic_ns();
+--- a/runtime/src/nvn/nvn.h
++++ b/runtime/src/nvn/nvn.h
+@@ -503,6 +503,7 @@
+ // it completed with its results in guest memory (true if it had to wait). Synchronous: 0, and nothing to wait for.
+ uint64_t gpu_serial();
+ bool gpu_wait(uint64_t serial);
++bool gpu_poll(uint64_t serial);
+ uint64_t gpu_write_back_serial();  // the last submit that writes guest memory (compute results)
+ 
+ // Programs: the translated stages bound by nvnProgramSetShaders (nvn_program.cpp; ShaderInfo in nvn_shaders.h).
