@@ -49,7 +49,7 @@ visible. Camera pose and dynamic resolution differ between these captures.
 
 ![PlayerMake with native Vulkan depth ordering](images/playermake-eyebrows-verified.png)
 
-The actual-source CPU regression suite now has 14 groups, including zero texture
+The actual-source CPU regression suite now has 15 groups, including zero texture
 uploads, cache-owned texture refresh, sine precision and platform-specific depth
 tolerance. They run with ASan/UBSan. The incremental patch helper was checked for
 byte-exact apply, idempotence, restore and refusal without partial changes.
@@ -66,6 +66,19 @@ not included in this repository.
 
 Use the translation tool with explicit directories for a local game dump; restart
 the game afterward because missing stages are cached for the running process.
+Existing entries are preserved; hash/pair checks and SPIR-V validation must pass
+before any missing stages are installed. `SPIRV_VAL` can select a Linux validator
+or a Windows SDK `spirv-val.exe` when running under WSL.
+
+```sh
+SP2PORT=/path/to/sp2port SPIRV_VAL=/path/to/spirv-val \
+  bash tools/wsl/wsl-translate-shaders.sh /path/to/private/shader_misses /path/to/private/spirv
+python3 tools/tests/test_shader_miss_workflow.py
+```
+
+The isolated workflow test uses fake translator/validator programs to check
+validated-only additions, preserved cache and metadata, idempotence, input and
+validation failures, and temporary-file cleanup.
 
 ## Apply and check
 

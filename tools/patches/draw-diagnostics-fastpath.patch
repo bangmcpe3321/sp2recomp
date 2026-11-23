@@ -1,0 +1,63 @@
+--- a/runtime/src/nvn/nvn_draw_trace.cpp
++++ b/runtime/src/nvn/nvn_draw_trace.cpp
+@@ -428,6 +428,10 @@
+     static const uint64_t trace_from = trace_env ? std::strtoull(trace_env, nullptr, 10) : 0;
+     // PATCH-TRACE-FRAME: also start the trace at a presented frame (NX_TRACE_FROM_FRAME).
+     static const char* frame_env = std::getenv("NX_TRACE_FROM_FRAME");
++    static const bool trace_debug = std::getenv("NX_TRACE_DRAWS_DEBUG") != nullptr;
++    // The independent diagnostics above still run. The draw trace has no work when
++    // disabled; avoid formatting summaries and consulting the CRT environment per draw.
++    if (!trace_env && !frame_env && !trace_debug) return;
+     static const uint64_t trace_frame_from = frame_env ? std::strtoull(frame_env, nullptr, 10) : 0;
+     // NX_TRACE_TARGET=<hex NVNtexture*>: only draws into that color target.
+     static const char* target_env = std::getenv("NX_TRACE_TARGET");
+@@ -436,16 +440,7 @@
+     // NX_TRACE_FS_HASH=<hash>[,<hash>...]: only draws with those fragment shaders.
+     static const char* fs_env = std::getenv("NX_TRACE_FS_HASH");
+     static const uint64_t trace_count = std::getenv("NX_TRACE_COUNT") ? std::strtoull(std::getenv("NX_TRACE_COUNT"), nullptr, 10) : 80;
+-    std::string sum;  // one summary line per traced draw, written by draw_trace_summary (the fingerprinted lines
+-                      // below are flushed in the same order: search the summary first, then read down to it)
+-    {
+-        char b[192];
+-        std::snprintf(b, sizeof b, "traced draw %llu: vs %s fs %s count %d x%d target %llx", (unsigned long long)g_stats.done,
+-                      vs->hash.c_str(), fs ? fs->hash.c_str() : "-", indexed ? c.i[0] : c.i[1], c.i[3],
+-                      (unsigned long long)t.colors[0]);
+-        sum = b;
+-    }
+-    if (trace_env || frame_env || std::getenv("NX_TRACE_DRAWS_DEBUG")) {  // why a draw is or is not traced
++    if (trace_env || frame_env || trace_debug) {  // why a draw is or is not traced
+         static uint64_t seen = 0;
+         if (seen++ < 12 && nx::g_frame.load() >= (trace_frame_from ? trace_frame_from : 0))
+             log("nvn: trace check draw %llu f %llu: frame %d target %llx/%llx traced %llu/%llu",
+@@ -458,6 +453,16 @@
+         (!trace_target || t.colors[0] == trace_target) &&
+         (!std::getenv("NX_TRACE_COLOR_ONLY") || (t.color_count && t.colors[0])) &&
+         (!fs_env || (fs && std::strstr(fs_env, fs->hash.c_str())))) {  // one hash or a comma list
++        std::string sum;  // one summary line per traced draw, written by draw_trace_summary (the fingerprinted lines
++                          // below are flushed in the same order: search the summary first, then read down to it)
++        {
++            char b[192];
++            std::snprintf(b, sizeof b, "traced draw %llu: vs %s fs %s count %d x%d target %llx", (unsigned long long)g_stats.done,
++                          vs->hash.c_str(), fs ? fs->hash.c_str() : "-", indexed ? c.i[0] : c.i[1], c.i[3],
++                          (unsigned long long)t.colors[0]);
++            sum = b;
++        }
++
+         // PATCH-TRACE-FRAME: dump the guest side of a bound R8 texture (a CPU-built glyph atlas) once.
+         if (std::getenv("NX_TRACE_GLYPHS")) {
+             static int dumped = 0;
+--- a/runtime/src/nvn/nvn_draw.cpp
++++ b/runtime/src/nvn/nvn_draw.cpp
+@@ -355,9 +355,9 @@
+     // report the loadOp so the two passes are distinguishable. Silent on healthy frames, no frame window (the
+     // composite renders at in-pass index ~690 of ~727 and trace_pass()'s 8000-line budget truncates first), and a
+     // periodic count so a zero-fire run is provably alive.
+-    if (const char* ca_env = std::getenv("NX_CLEAR_AREA"); ca_env && *ca_env && t.color_count &&
+-                                                     t.colors[0] == std::strtoull(ca_env, nullptr, 16) &&
+-                                                     g_pass_images[0]) {
++    static const char* ca_env = std::getenv("NX_CLEAR_AREA");
++    static const uint64_t ca_target = ca_env && *ca_env ? std::strtoull(ca_env, nullptr, 16) : 0;
++    if (ca_env && *ca_env && t.color_count && t.colors[0] == ca_target && g_pass_images[0]) {
+         static uint64_t ca_passes = 0, ca_fired = 0;
+         const GpuImage& ci = *g_pass_images[0];
+         const bool area_small = extent.width < ci.width || extent.height < ci.height;

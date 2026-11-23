@@ -29,6 +29,7 @@ def main():
         ('test_stable_sine.py', 'runtime/src/nvn/nvn_spirv_patch.cpp'),
         ('test_zero_texture_upload.py', 'runtime/src/nvn/nvn_pipeline.cpp'),
         ('test_native_depth_tolerance.py', 'runtime/src/nvn/nvn_raster.cpp'),
+        ('test_draw_trace_fastpath.py', 'runtime/src/nvn/nvn_draw_trace.cpp'),
         ('test_mouse_movement.py', 'runtime/src/platform_win.cpp'),
         ('test_unit_point.py', None),
     ]

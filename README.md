@@ -21,7 +21,10 @@ sine precision fix removes the measured area-light stippling. Native Vulkan no
 longer applies the extra Metal depth tolerance that let the face overwrite nearby
 eyebrows. See [evidence, scope and application](docs/PLAZA_NEWS_RENDERING.md), the
 [apply/restore helper](tools/patches/patch-plaza-news-rendering.py), and
-[14 runtime sanitizer checks](tools/verify-tutorial-runtime.py).
+[15 runtime sanitizer checks](tools/verify-tutorial-runtime.py).
+
+Disabled draw diagnostics also skip their former per-draw environment scans and
+trace formatting. See the [measured CPU optimization and FPS observations](docs/DRAW_DIAGNOSTICS_PERFORMANCE.md).
 
 Black story-mode trees, balloons and crates were traced separately to missing
 shader-cache stages. The local cache has been rebuilt and validated; game-derived
