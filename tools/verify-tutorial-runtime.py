@@ -30,6 +30,7 @@ def main():
         ('test_zero_texture_upload.py', 'runtime/src/nvn/nvn_pipeline.cpp'),
         ('test_native_depth_tolerance.py', 'runtime/src/nvn/nvn_raster.cpp'),
         ('test_draw_trace_fastpath.py', 'runtime/src/nvn/nvn_draw_trace.cpp'),
+        ('test_stall_sampler_optin.py', 'runtime/src/kernel_watch.cpp'),
         ('test_frame_stats_gate.py', 'runtime/src/frame_stats.cpp'),
         ('test_present_pacing_stats.py', 'runtime/src/nvn/nvn_queue.cpp'),
         ('test_pipeline_cache_persistence.py', 'runtime/src/nvn/nvn_pipeline_cache.cpp'),

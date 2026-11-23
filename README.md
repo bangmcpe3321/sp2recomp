@@ -17,14 +17,16 @@ used to establish it, and how far the port has got.
 Windows mouse movement now feeds the emulated gyro while holding right mouse or
 using F1 capture. The latest adjustment corrects reported reversed horizontal
 aiming and lowers sensitivity to 0.03 degrees/pixel; use **[ / ]** while captured
-to adjust it. **F3** toggles the FPS overlay.
+to adjust it. **F3** toggles the FPS overlay. A follow-up replaces query-driven
+motion with coherent 200 Hz samples to address intermittent aiming; manual
+verification remains open.
 
 Periodic rendering summaries and driver-cache checkpoints are disabled during
 normal play. Pipeline keys ignore padding, driver caches persist correctly, and cache
 eviction now retains recently used pipelines. Optional per-frame capture records
 compilation costs. **Stable 60 FPS and first-shot/transition
 stalls remain unverified.** See [controls, evidence and patch instructions](docs/FRAME_STUTTER_MOUSE_GYRO.md)
-and [23 runtime checks](tools/verify-tutorial-runtime.py).
+and [24 runtime checks](tools/verify-tutorial-runtime.py).
 
 
 

@@ -15,7 +15,8 @@ controller sticks remain available.
 The first manual test confirmed vertical aiming, but reported excessive
 sensitivity and reversed horizontal movement. The follow-up reverses the
 horizontal mapping and lowers the default from 0.15 to **0.03 degrees per pixel**.
-These final adjustments still need a manual recheck.
+A later manual test found intermittent aiming even while capture remained active.
+The motion-stream follow-up below addresses that separately; live recheck remains open.
 
 While captured, press **[** to lower sensitivity by 20%, or **]** to raise it by
 25%. These keys do not repeat while held. For a different startup value, set
@@ -24,10 +25,21 @@ While captured, press **[** to lower sensitivity by 20%, or **]** to raise it by
 disables mouse input. Six-axis must remain enabled; normal play uses
 `NX_SIXAXIS=1` and no diagnostic pose/seek/grid/wobble settings.
 
-Each emulated sensor has its own read cursor. Rotation comes from pixel
-displacement; elapsed time is used for angular velocity. Six-axis velocity is
-reported in revolutions/second, angle in revolutions, with matching orientation
-and gravity fields. The units follow the [upstream motion implementation](https://git.dukantic.fr/dukantic/nxnative_patch/src/commit/76545a58a79058663865f1994a3947f2c799435f/dm/host/hle_hid.c).
+Mouse motion now publishes a **200 Hz** stream with numbered 5 ms samples and a
+16-sample history. Repeated reads return the same samples; both emulated sensors
+see the same history. A 60 Hz reader receives the intervening 3/3/4 samples,
+rather than consuming one displacement on whichever query arrives first.
+
+The previous independent Euler angles also produced angular rates inconsistent
+with the orientation matrix after mixed-axis motion. The stream integrates local
+body rotations into one normalized quaternion and derives HID direction, gravity
+and body rates coherently. Sead transposes HID direction, and the game's
+`PlayerCtrlData200Hz::Data::integrate` integrates local rates with `q * dq`.
+Tests independently reconstruct that rotation from the emitted rates, including
+mixed-axis movement and full turns. Long-stall catch-up is bounded to 16 samples.
+
+Six-axis velocity is in revolutions/second and integrated angle in revolutions;
+see the [upstream motion implementation](https://git.dukantic.fr/dukantic/nxnative_patch/src/commit/76545a58a79058663865f1994a3947f2c799435f/dm/host/hle_hid.c).
 
 ## Overlay and timing
 
@@ -57,6 +69,9 @@ Forced termination cannot save the in-memory capture.
 
 ## Changes addressing stutter
 
+- The detailed 5 ms all-thread stall sampler is now opt-in (`NX_STALL_SAMPLER=1`).
+  Explicit `NX_CPU_LOG`, `NX_NATIVE_LOG` or `NX_THREAD_DUMP_AT` also enable it;
+  `NX_STALL_SAMPLER=0` overrides those requests. The 1 Hz hang watchdog remains.
 - Periodic present/thread/render summaries are opt-in (`NX_PRESENT_STATS=1`,
   `NX_RENDER_STATS=1`). Android affinity placement still runs with diagnostics off.
 - Pipeline keys initialize the padding in the depth/stencil substructure. The
@@ -110,20 +125,22 @@ Apply after the existing plaza/news rendering and draw-diagnostic patches:
 ```sh
 python3 tools/patches/patch-frame-stutter-overlay.py --root "$HOME/sp2port"
 python3 tools/patches/patch-mouse-gyro.py --root "$HOME/sp2port"
+python3 tools/patches/patch-motion-stream-stall-diagnostics.py --root "$HOME/sp2port"
 python3 tools/verify-tutorial-runtime.py --root "$HOME/sp2port"
 ```
 
 Rebuild the changed runtime sources, including both `platform_win.cpp` and
 `hle_hid.cpp` when changing the new `mouse_gyro.h`; the local incremental builder
-does not track header dependencies. Both helpers support `--check` and
-`--restore`; restore mouse gyro before the underlying stutter/overlay patch.
+does not track header dependencies. All helpers support `--check` and `--restore`. Restore the motion-stream
+follow-up before mouse gyro, then restore the underlying stutter/overlay patch.
 
-Validation: the Windows LLVM-MinGW build succeeds. The 23 CPU regression groups
+Validation: the Windows LLVM-MinGW build succeeds. The 24 CPU regression groups
 include frame statistics disabled/enabled paths, cache compatibility and failed
 writes, every semantic pipeline-key byte, bounded CSV capture with compile costs,
 overlay counters/stalls, bounded LRU hot-entry retention, collisions and deferred
-retirement, actual Windows mouse-message processing, gyro displacement
-at 30/60/120 Hz, both sensors, release/recapture, finite orientation/gravity and
+retirement, actual Windows mouse-message processing, gyro samples
+consumed at 30/60/120 Hz, repeat reads, both sensors, release/recapture, independent
+rate-to-orientation integration, bounded catch-up, finite orientation/gravity and
 the actual Windows six-axis ABI bridge. Patch application, idempotence and
 byte-for-byte restoration were checked in an isolated fixture.
 
