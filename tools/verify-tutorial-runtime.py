@@ -17,6 +17,7 @@ def main():
     if not shutil.which('g++'):
         parser.error('g++ with C++20, AddressSanitizer and UndefinedBehaviorSanitizer is required')
     tests = [
+        ('test_news_ending_reservation.py', None),
         ('test_gameplay_options.py', 'runtime/src/sp2_gameplay_options.h'),
         ('test_switch_pro_lifecycle.py', 'runtime/src/switch_pro_win.h'),
         ('test_switch_pro_mapping.py', 'runtime/src/switch_pro_mapping.h'),
@@ -26,6 +27,7 @@ def main():
         ('test_tutorial_sixaxis.py', 'runtime/src/hle_hid.cpp'),
         ('test_linear_texture_readback.py', 'runtime/src/nvn/nvn_upload.cpp'),
         ('test_image_cache.py', 'runtime/src/nvn/nvn_image.cpp'),
+        ('test_image_held_front_cache.py', 'runtime/src/nvn/nvn_image.cpp'),
         ('test_block_attachment.py', 'runtime/src/nvn/nvn_pipeline.cpp'),
         ('test_instance_chunk.py', 'runtime/src/nvn/nvn_draw.cpp'),
         ('test_integer_shader_io.py', 'runtime/src/nvn/nvn_spirv_patch.cpp'),

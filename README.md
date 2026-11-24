@@ -13,6 +13,15 @@ structure.
 
 ## Current state
 
+### Renderer cache and news ending follow-up - November 24, 2026
+
+The latest candidate reuses equivalent graphics pipelines, avoids repeated image
+tree lookups and diagnostic allocations, and optimizes the renderer while keeping
+gameplay timing unchanged. It also corrects an old fallback that finished the
+news ending before its reserved delay. Source regressions and the Windows build
+pass; loading pauses and ink-related FPS dips still need manual comparison.
+See [changes, evidence and rollback](docs/RENDERER_CACHE_PERFORMANCE.md).
+
 ### Native Switch Pro input and gameplay options - November 24, 2026
 
 The Windows runtime now reads native Switch Pro Controller buttons, sticks and
