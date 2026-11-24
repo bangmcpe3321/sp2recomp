@@ -97,6 +97,9 @@ repairs and is also installed as the launcher's default
 The preceding executable remains in a timestamped
 `sp2-controller-gameplay-before-renderer-news-*.exe` backup.
 
+The later [Pro pitch and audio timing follow-up](PRO_PITCH_AUDIO_TIMING.md)
+records the currently installed executable and the remaining intro-sync issue.
+
 The build launched with original plaza/news timing, dynamic resolution enabled,
 real occlusion queries retained, and input injection off. News duration and
 same-location ink-shooting/hiding FPS still need manual comparison. Normal window

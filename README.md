@@ -22,6 +22,10 @@ news ending before its reserved delay. Source regressions and the Windows build
 pass; loading pauses and ink-related FPS dips still need manual comparison.
 See [changes, evidence and rollback](docs/RENDERER_CACHE_PERFORMANCE.md).
 
+The following build corrects physical Pro Controller vertical aiming. Tutorial
+intro audio can still run ahead when animation falls below its intended rate;
+the clean manual comparison remains open. See [pitch and audio timing](docs/PRO_PITCH_AUDIO_TIMING.md).
+
 ### Native Switch Pro input and gameplay options - November 24, 2026
 
 The Windows runtime now reads native Switch Pro Controller buttons, sticks and

@@ -41,14 +41,14 @@ int main(){
   time+=3*ms;m.push_accel(time,flat);m.push_gyro(time,pitch);
   time+=7*ms;m.push_accel(time,flat);m.push_gyro(time,pitch);
  }
- s=latest(m);valid(s);assert(near(s.velocity[0],.25));assert(near(s.angle[0],.25));
- const double expected[9]={1,0,0,0,0,1,0,-1,0};
+ s=latest(m);valid(s);assert(near(s.velocity[0],-.25));assert(near(s.angle[0],-.25));
+ const double expected[9]={1,0,0,0,0,-1,0,1,0};
  for(int i=0;i<9;i++)assert(near(s.direction[i],expected[i]));
  assert(m.read_states(0,a,16)==16&&m.read_states(1,b,16)==16);
  assert(std::memcmp(a,b,sizeof a)==0);assert(m.read_states(0,b,16)==16&&std::memcmp(a,b,sizeof a)==0);
  for(int i=1;i<16;i++)assert(a[i-1].sampling_number==a[i].sampling_number+1);
  // No integration across long stalls or duplicate/out-of-order timestamps.
- time+=2000*ms;m.push_gyro(time,pitch);s=latest(m);assert(near(s.angle[0],.25));
+ time+=2000*ms;m.push_gyro(time,pitch);s=latest(m);assert(near(s.angle[0],-.25));
  assert(m.read_states(0,a,16)==1);assert(near(s.velocity[0],0));
  m.push_gyro(time,pitch);m.push_gyro(time-ms,pitch);assert(latest(m).sampling_number==s.sampling_number);
  const float bad[3]={std::numeric_limits<float>::quiet_NaN(),0,0};
@@ -67,8 +67,7 @@ int main(){
  for(int i=0;i<500;i++,time+=5*ms){m.push_accel(time,flat);m.push_gyro(time,bias);}
  s=latest(m);assert(near(s.angle[0],0)&&near(s.angle[1],0)&&near(s.angle[2],0));
  assert(near(s.direction[0],1));
- // Horizontal camera mapping: SDL +Y becomes HID +Z; vertical/pitch and
- // SDL +Z -> HID +Y retain their existing direction.
+ // Correcting pitch retains horizontal SDL +Y -> HID +Z and roll SDL +Z -> HID +Y.
  for(int axis=1;axis<3;axis++){
   m.reset();float rate[3]={};rate[axis]=pi/2;
   m.push_accel(ms,flat);m.push_gyro(ms,rate);
@@ -79,7 +78,7 @@ int main(){
  m.reset();m.push_accel(ms,flat);m.push_gyro(ms,pitch);
  const float slow[3]={.04f,0,0};
  for(int i=1;i<=10;i++){m.push_accel(ms+i*5*ms,flat);m.push_gyro(ms+i*5*ms,slow);}
- s=latest(m);assert(s.velocity[0]>.006f);
+ s=latest(m);assert(s.velocity[0]<-.006f);
  assert(m.read_states(2,a,16)==0&&m.read_states(0,nullptr,16)==0&&m.read_states(0,a,0)==0);
  puts("controller motion: units, axes, Rodrigues, resampling, bias, gaps and shared history passed");
 }
