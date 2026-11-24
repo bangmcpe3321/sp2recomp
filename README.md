@@ -13,8 +13,6 @@ structure.
 
 ## Current state
 
-See [STATUS.md](STATUS.md) for the installed build, verified results and unresolved issues.
-
 ### Renderer cache and news ending follow-up - November 24, 2026
 
 The latest candidate reuses equivalent graphics pipelines, avoids repeated image
