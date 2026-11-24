@@ -15,6 +15,11 @@ structure.
 
 ### Warm-cache loading and image replay follow-up - November 24, 2026
 
+The capture launcher now keeps synchronous statistics off by default. The user
+confirmed a much smoother run; measured recurring 300-frame hitches fell from
+about 185 ms to 17.5 ms. Sustained story/Tentakeel 30–40 FPS remains under
+investigation. See [quiet capture and remaining performance work](docs/QUIET_PERFORMANCE_CAPTURE.md).
+
 The user confirmed inventory navigation works and loading improved after a normal
 close/restart. Matching pipeline requests reused the saved driver cache. Shooting
 and hiding in ink still cause dips. The next candidate removes repeated image
