@@ -13,6 +13,16 @@ structure.
 
 ## Current state
 
+### Inventory crash and loading diagnostics - November 24, 2026
+
+The inventory's NFC initialization now receives a valid service interface and
+the game's handled "no reader" result. IPC and generated-worker regressions
+pass; inventory navigation still needs a manual retest. See [the crash repair](docs/INVENTORY_NFP_CRASH.md).
+
+Loading captures show multi-second pipeline creation stalls. Optional driver
+cache-hit feedback and complete graphics/compute timing now help distinguish
+their causes; the long loading pauses remain open. See [loading evidence and diagnostics](docs/LOADING_PIPELINE_FEEDBACK.md).
+
 ### Renderer cache and news ending follow-up - November 24, 2026
 
 The latest candidate reuses equivalent graphics pipelines, avoids repeated image
