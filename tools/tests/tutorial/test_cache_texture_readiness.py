@@ -8,7 +8,10 @@ def function(source,signature):
   depth+=(source[e]=='{')-(source[e]=='}');e+=1
  return source[s:e]
 pipe=(r/'nvn_pipeline.cpp').read_text();sampler=(r/'nvn_sampler.cpp').read_text()
-parts=[function(sampler,'uint64_t hash_memory('),function(sampler,'void check_linear_content('),function(pipe,'void check_atlas_content('),function(pipe,'bool sampled_ready(')]
+parts=[function(sampler,'uint64_t hash_memory('),function(sampler,'void check_linear_content('),function(pipe,'void check_atlas_content(')]
+reuse='bool sampled_ready_image(' in pipe
+if reuse:parts.append(function(pipe,'bool sampled_ready_image('))
+parts.append(function(pipe,'bool sampled_ready('))
 prefix=r'''
 #include <algorithm>
 #include <atomic>
@@ -44,6 +47,44 @@ bool write_watch_take(uint64_t,uint64_t*,uint64_t*) { return false; }
 }
 uint64_t g_not_ready[6]{};
 '''
+extra=''
+if reuse:
+ sets=(r/'nvn_sets.cpp').read_text()
+ start=sets.index('        r.texture = texture;\n        GpuImage* img = nullptr; // PATCH-SAMPLED-IMAGE-REUSE')
+ end=sets.index('        if (clears_pending_image(img)) out |= kNeedBreak | kSampledPending;',start)+len('        if (clears_pending_image(img)) out |= kNeedBreak | kSampledPending;')
+ fragment=sets[start:end]
+ assert 'image_of(' not in fragment
+ extra=r'''
+bool wrote=false,pending=false,dummy_is_ready=true;
+uint64_t wrote_checks=0,pending_checks=0,dummy_checks=0;
+bool pass_wrote(GpuImage* image){assert(image==cache_image);++wrote_checks;return wrote;}
+bool clears_pending_image(GpuImage* image){assert(image==cache_image);++pending_checks;return pending;}
+bool dummy_ready(int){++dummy_checks;return dummy_is_ready;}
+uint32_t gather_fragment(uint64_t texture){
+ constexpr uint32_t kNeedBreak=1,kSampledPending=2;uint32_t out=0;
+ struct {uint64_t texture=0;} r;struct {int image=0;} binding;auto* b=&binding;
+ for(int once=0;once<1;once++){
+'''+fragment+r'''
+ }return out;
+}
+void test_gather_reuse(){
+ Texture texture;active=&texture;auto owner=std::make_shared<GpuImage>();cache_image=owner.get();
+ for(unsigned state=0;state<16;state++){
+  texture.dirty=bool(state&1);texture.has_writes=bool(state&2);wrote=bool(state&4);pending=bool(state&8);
+  uint64_t before=resolutions;
+  uint32_t actual=gather_fragment(1),expected=(texture.dirty||texture.has_writes||wrote)?1:0;
+  if(pending)expected|=3;
+  assert(actual==expected&&resolutions==before+1);
+ }
+ cache_image=nullptr;assert(gather_fragment(1)==3); // Null image preserved through both consumers.
+ wrote=pending=false;uint64_t before=resolutions,checks=wrote_checks;
+ dummy_is_ready=true;assert(gather_fragment(0)==0);
+ dummy_is_ready=false;assert(gather_fragment(0)==1);
+ assert(resolutions==before&&wrote_checks==checks&&dummy_checks==2);
+ assert(!texture.image&&owner.use_count()==1);
+ puts("PASS actual texture gather: one image resolution, identical break/pending decisions, missing and dummy textures, no ownership change");
+}
+'''
 tests=r'''
 }}
 int main() {
@@ -75,8 +116,9 @@ int main() {
  assert(!t.image);assert(cache.use_count()==1);assert(resolutions>0);
 }
 '''
+if reuse:tests=tests.replace(' assert(!t.image);assert(cache.use_count()==1);assert(resolutions>0);',' assert(!t.image);assert(cache.use_count()==1);assert(resolutions>0);\n test_gather_reuse();')
 with tempfile.TemporaryDirectory(prefix='sp2-cache-ready-') as td:
- d=Path(td);cpp=d/'test.cpp';exe=d/'test';cpp.write_text(prefix+'\n'.join(parts)+tests)
+ d=Path(td);cpp=d/'test.cpp';exe=d/'test';cpp.write_text(prefix+'\n'.join(parts)+extra+tests)
  subprocess.run(['g++','-std=c++20','-O1','-g','-fsanitize=address,undefined','-fno-omit-frame-pointer',str(cpp),'-o',str(exe)],check=True)
  subprocess.run([str(exe)],check=True)
 print('PASS cache-owned readiness, pitch/glyph CPU refresh before pass break, GPU-only authority and ownership')

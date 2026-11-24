@@ -30,6 +30,7 @@ def main():
         ('test_linear_texture_readback.py', 'runtime/src/nvn/nvn_upload.cpp'),
         ('test_image_cache.py', 'runtime/src/nvn/nvn_image.cpp'),
         ('test_image_held_front_cache.py', 'runtime/src/nvn/nvn_image.cpp'),
+        ('test_image_retirement_groups.py', 'runtime/src/nvn/nvn_image.cpp'),
         ('test_block_attachment.py', 'runtime/src/nvn/nvn_pipeline.cpp'),
         ('test_instance_chunk.py', 'runtime/src/nvn/nvn_draw.cpp'),
         ('test_integer_shader_io.py', 'runtime/src/nvn/nvn_spirv_patch.cpp'),

@@ -1,17 +1,24 @@
 # Pro Controller pitch and intro audio timing
 
 The user reported reversed vertical aiming specifically with the physical Switch
-Pro Controller. The first rate-only correction did not fix the user's aiming.
-`tools/patches/patch-pro-gyro-pitch.py` now corrects accelerometer tilt as well as
-the pitch sign before quaternion integration. Reflecting the acceleration's Y
-axis requires the axial gyro signs (-X,+Y,-Z); initial gravity, integrated angle
-and direction now agree. Horizontal aiming and mouse gyro retain their mapping.
+Pro Controller, including after pressing Y to reset the camera. Both the first
+rate-only correction and the subsequent tilt correction remained reversed in
+game. The current helper accounts for the normal `NinSixAxisSensorAddon` consumer,
+which converts HID vectors to `(-X,Z,Y)` before the camera uses them.
 
-The production motion regression checks a negative 90-degree guest pitch against
-an independent rotation matrix, irregular packet resampling, calibration, shared
-sensor history and gaps. The production HID/arbitration regression also passes
-with the corrected sign across capture, focus and reconnect. Native worker
-lifecycle tests pass. In-game direction still needs the user's confirmation.
+The new mapping is gyro `(+SDL X,-SDL Z,+SDL Y)` and acceleration
+`(-SDL X,+SDL Z,-SDL Y)`. Relative to the preceding fused stream, it rotates both
+sensor frames 180 degrees around HID Z, preserving yaw and flat gravity while
+reversing pitch consistently. Mouse aiming retains its mapping. The helper
+upgrades either earlier attempt and supports restoring the original mapping.
+
+The production motion regression checks the actual generated normal-controller
+conversion against the known mouse-up route for both physical pitch signs. It
+also checks combined rotations against independent Rodrigues references from
+flat and tilted startup, irregular resampling, calibration, shared sensor history
+and gaps. HID/arbitration and native-worker lifecycle regressions pass. In-game
+direction still needs the user's confirmation; earlier attempts are not verified
+fixes.
 
 ```bash
 python3 tools/patches/patch-pro-gyro-pitch.py --root "$HOME/sp2port"
@@ -22,12 +29,13 @@ Rebuild `platform_win.cpp`, which includes the changed header. The installer als
 supports `--check` and `--restore`; restoration requires rebuilding that unit.
 
 The installed local build is
-`C:\sp2stage\sp2win\sp2-pro-tilt-performance.exe`, also copied to the launcher's
+`C:\sp2stage\sp2win\sp2-motion-image-reuse.exe`, also copied to the launcher's
 default `sp2-controller-gameplay.exe`. SHA-256:
-`12ccf4effa7dec1710617d5ea7508ae262e5b12932b762b3a1af08807d2e4456`.
-It retains the [renderer and news repairs](RENDERER_CACHE_PERFORMANCE.md).
+`9f1339b2f056cc9d2be450ad682afe45e7447ca30b7dc5180c6278b07cd0befc`.
+It retains the [renderer and news repairs](RENDERER_CACHE_PERFORMANCE.md),
+the verified inventory repair and the [image replay follow-up](IMAGE_REPLAY_PERFORMANCE.md).
 Its preceding build remains in a timestamped
-`sp2-controller-gameplay-before-pro-tilt-*.exe` backup.
+`sp2-controller-gameplay-before-motion-image-reuse-*.exe` backup.
 
 ## Audio ahead during the tutorial intro
 

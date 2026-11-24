@@ -13,6 +13,16 @@ structure.
 
 ## Current state
 
+### Warm-cache loading and image replay follow-up - November 24, 2026
+
+The user confirmed inventory navigation works and loading improved after a normal
+close/restart. Matching pipeline requests reused the saved driver cache. Shooting
+and hiding in ink still cause dips. The next candidate removes repeated image
+resolution and temporary retirement-map allocations; see [evidence and verification](docs/IMAGE_REPLAY_PERFORMANCE.md).
+
+Physical pitch remains under manual verification after correcting the game's
+additional motion-axis conversion. Tutorial audio sync and stable 60 FPS remain open.
+
 ### Inventory crash and loading diagnostics - November 24, 2026
 
 The inventory's NFC initialization now receives a valid service interface and

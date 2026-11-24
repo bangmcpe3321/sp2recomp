@@ -38,5 +38,6 @@ restoration also requires rebuilding those units. Installer checks confirm
 idempotence, exact round-trip restoration and no writes on failed preflight.
 
 These regressions establish the missing-interface and supported no-reader
-contracts. Opening and navigating the inventory still needs a manual retest in
-the Windows candidate. This service does not implement amiibo scanning.
+contracts. The user subsequently confirmed that opening and navigating the
+inventory works in the Windows candidate. This service does not implement
+amiibo scanning.

@@ -13,10 +13,10 @@ NEW = '''    static std::map<StorageKey, HeldImage> held;
     static HeldHit hits[512];
     static uint64_t last_frame = UINT64_MAX;'''
 PRUNE = '''    if (frame != last_frame) {
-        std::map<uint64_t, uint64_t> latest_write;'''
+'''
 PRUNE_NEW = '''    if (frame != last_frame) {
         for (auto& hit : hits) hit.entry = nullptr;
-        std::map<uint64_t, uint64_t> latest_write;'''
+'''
 LOOKUP = '''    if (auto it = held.find(key); it != held.end()) {
         it->second.used = frame;
         return it->second.image.get();
@@ -53,18 +53,24 @@ def main():
     p.add_argument('--restore', action='store_true')
     a = p.parse_args()
     path = a.root / 'runtime/src/nvn/nvn_image.cpp'
-    data = path.read_text()
-    for old, new in [(OLD, NEW), (PRUNE, PRUNE_NEW), (LOOKUP, LOOKUP_NEW)]:
-        if data.count(new) == 1:
-            data = data.replace(new, old if a.restore else new, 1)
-        elif data.count(old) == 1:
-            data = data.replace(old, old if a.restore else new, 1)
-        else:
+    data = path.read_bytes()
+    for old_text, new_text in [(OLD, NEW), (PRUNE, PRUNE_NEW), (LOOKUP, LOOKUP_NEW)]:
+        matches = []
+        for newline in [b'\n', b'\r\n']:
+            old = old_text.encode().replace(b'\n', newline)
+            new = new_text.encode().replace(b'\n', newline)
+            if data.count(new) == 1:
+                matches.append((new, old if a.restore else new))
+            elif data.count(old) == 1:
+                matches.append((old, old if a.restore else new))
+        if len(matches) != 1:
             raise SystemExit('Descriptor-image cache anchor mismatch; no files changed')
+        before, after = matches[0]
+        data = data.replace(before, after, 1)
     if a.check:
         print('Preflight passed')
         return
-    path.write_text(data)
+    path.write_bytes(data)
     print('Restored' if a.restore else 'Applied; rebuild nvn_image.cpp')
 
 

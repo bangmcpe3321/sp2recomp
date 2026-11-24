@@ -12,6 +12,13 @@ creation. It did not evict pipelines from the application LRU. Its compatible
 that file even though its size stayed the same. Loading the file does not prove
 that an individual creation request hit the driver's application pipeline cache.
 
+A later same-executable normal-close/relaunch comparison verified warm reuse:
+all 658 initially matched recipe/shader requests hit the saved cache. Their
+combined host creation time fell from 40,495 ms to 1,181 ms. The user confirmed
+that loading improved; ink shooting/hiding still caused dips. This verifies
+persistence and warm reuse, while first-use and non-compilation loading work
+remain. See the [image replay follow-up](IMAGE_REPLAY_PERFORMANCE.md).
+
 `tools/patches/patch-pipeline-creation-feedback.py` adds optional Vulkan 1.3
 creation feedback. Enable `NX_PIPELINE_FEEDBACK=1`, or pass `-PipelineFeedback`
 to the manual Windows capture helper. Each `PIPE_FEEDBACK` record includes:
