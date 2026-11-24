@@ -1,10 +1,11 @@
 # Pro Controller pitch and intro audio timing
 
 The user reported reversed vertical aiming specifically with the physical Switch
-Pro Controller. `tools/patches/patch-pro-gyro-pitch.py` corrects the pitch sign
-before quaternion integration. Angular velocity, integrated angle and direction
-therefore use the same sign. Horizontal aiming and mouse gyro retain their
-existing mapping.
+Pro Controller. The first rate-only correction did not fix the user's aiming.
+`tools/patches/patch-pro-gyro-pitch.py` now corrects accelerometer tilt as well as
+the pitch sign before quaternion integration. Reflecting the acceleration's Y
+axis requires the axial gyro signs (-X,+Y,-Z); initial gravity, integrated angle
+and direction now agree. Horizontal aiming and mouse gyro retain their mapping.
 
 The production motion regression checks a negative 90-degree guest pitch against
 an independent rotation matrix, irregular packet resampling, calibration, shared
@@ -21,12 +22,12 @@ Rebuild `platform_win.cpp`, which includes the changed header. The installer als
 supports `--check` and `--restore`; restoration requires rebuilding that unit.
 
 The installed local build is
-`C:\sp2stage\sp2win\sp2-pro-pitch-performance.exe`, also copied to the launcher's
+`C:\sp2stage\sp2win\sp2-pro-tilt-performance.exe`, also copied to the launcher's
 default `sp2-controller-gameplay.exe`. SHA-256:
-`bb621ba59f8dc7c877d895ff043cf0dd228f0e5aaffc971cb5a2dd85e71d8fae`.
+`12ccf4effa7dec1710617d5ea7508ae262e5b12932b762b3a1af08807d2e4456`.
 It retains the [renderer and news repairs](RENDERER_CACHE_PERFORMANCE.md).
 Its preceding build remains in a timestamped
-`sp2-controller-gameplay-before-pro-pitch-*.exe` backup.
+`sp2-controller-gameplay-before-pro-tilt-*.exe` backup.
 
 ## Audio ahead during the tutorial intro
 

@@ -58,7 +58,20 @@ int main(){
  const float tilted[3]={0,g*.70710678f,g*.70710678f};
  m.push_accel(ms,tilted);m.push_gyro(ms,zero);s=latest(m);valid(s);
  for(int i=0;i<3;i++)assert(near(s.acceleration[i],-s.direction[i*3+2]));
- assert(near(s.direction[4],.70710678));assert(near(s.direction[5],-.70710678));
+ assert(near(s.direction[4],.70710678));assert(near(s.direction[5],.70710678));
+ // Physical positive-X pitch changes SDL gravity to (0,cos(theta),-sin(theta)).
+ // Static tilt and integrated gyro must yield the same HID attitude: the game
+ // fuses both, so negating rates alone leaves its accelerometer aiming reversed.
+ ControllerMotion moving;moving.push_accel(ms,flat);moving.push_gyro(ms,pitch);
+ for(int i=1;i<=100;i++){
+  const double theta=(pi/2)*(i*.005);const float physical[3]={0,float(g*std::cos(theta)),float(-g*std::sin(theta))};
+  moving.push_accel(ms+i*5*ms,physical);moving.push_gyro(ms+i*5*ms,pitch);
+ }
+ auto moving_sample=latest(moving);valid(moving_sample);
+ for(int i=0;i<3;i++)assert(near(moving_sample.acceleration[i],-moving_sample.direction[i*3+2]));
+ ControllerMotion settled;const float final_tilt[3]={0,g*.70710678f,-g*.70710678f};
+ settled.push_accel(ms,final_tilt);settled.push_gyro(ms,zero);auto static_sample=latest(settled);
+ for(int i=0;i<9;i++)assert(near(static_sample.direction[i],moving_sample.direction[i]));
  // Upside-down startup is finite and handles opposite-vector quaternion.
  m.reset();const float inverted[3]={0,-g,0};m.push_accel(ms,inverted);m.push_gyro(ms,zero);
  s=latest(m);valid(s);assert(near(s.direction[8],-1));
