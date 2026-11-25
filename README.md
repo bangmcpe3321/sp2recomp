@@ -13,6 +13,22 @@ structure.
 
 ## Current state
 
+### Windows allocation overhead follow-up - November 25, 2026
+
+Retired image memory now has a bounded Windows cache, preserving image contents,
+initialization and submit retirement rules. On the local RTX 3060, an isolated
+1,200-image benchmark reduced driver allocations from 1,200 to 7 and allocation
+work from roughly 560 ms to 3 ms. This measures allocation overhead; gameplay FPS
+still needs a same-area check. See [implementation and validation](docs/IMAGE_MEMORY_CACHE.md).
+
+### Synchronous upload reuse candidate - November 24, 2026
+
+Ordinary texture uploads now use the synchronous renderer's existing upload
+buffer instead of treating its capacity as zero and allocating separate staging
+memory. Large loading bursts retain separate allocations. All 46 local runtime
+regression groups pass; story FPS and ink-shooting/hiding gains still need the
+manual comparison. See [scope, proof and rollback](docs/SYNC_UPLOAD_STAGING.md).
+
 ### Warm-cache loading and image replay follow-up - November 24, 2026
 
 The capture launcher now keeps synchronous statistics off by default. The user

@@ -28,6 +28,8 @@ def main():
         ('test_scalable_font_missing_fallback.py', 'gen/main/code_417.cpp'),
         ('test_tutorial_sixaxis.py', 'runtime/src/hle_hid.cpp'),
         ('test_linear_texture_readback.py', 'runtime/src/nvn/nvn_upload.cpp'),
+        ('test_sync_upload_staging.py', None),
+        ('test_image_memory_cache.py', None),
         ('test_image_cache.py', 'runtime/src/nvn/nvn_image.cpp'),
         ('test_image_held_front_cache.py', 'runtime/src/nvn/nvn_image.cpp'),
         ('test_image_retirement_groups.py', 'runtime/src/nvn/nvn_image.cpp'),
