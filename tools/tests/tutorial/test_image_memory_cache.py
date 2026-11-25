@@ -110,15 +110,33 @@ with tempfile.TemporaryDirectory() as tmp:
    (fixture/name).write_bytes(raw);expected[name]=raw
   subprocess.run(command,check=True,stdout=subprocess.DEVNULL)
   installed={name:(fixture/name).read_bytes() for name in names}
+  owned_header=target/'image_memory_cache.h'
+  expected_header=owned_header.read_bytes().replace(b'\r\n',b'\n')
+  if mode=='crlf':expected_header=expected_header.replace(b'\n',b'\r\n')
+  if mode=='mixed':expected_header=expected_header.replace(b'\n',b'\r\n',3)
+  owned_header.write_bytes(expected_header)
+  subprocess.run(command+['--check'],check=True,stdout=subprocess.DEVNULL)
   subprocess.run(command,check=True,stdout=subprocess.DEVNULL)
+  assert owned_header.read_bytes()==expected_header
   assert installed=={name:(fixture/name).read_bytes() for name in names}
   subprocess.run(command+['--restore'],check=True,stdout=subprocess.DEVNULL)
   assert expected=={name:(fixture/name).read_bytes() for name in names},mode
+  assert not owned_header.exists()
  subprocess.run(command,check=True,stdout=subprocess.DEVNULL)
+ # A locally edited header must still refuse every mode before any source write.
+ owned_header=target/'image_memory_cache.h';original_header=owned_header.read_bytes()
+ changed_header=original_header+b'// local edit\n';owned_header.write_bytes(changed_header)
+ snapshot={name:(fixture/name).read_bytes() for name in names}
+ for flags in ([],['--restore'],['--check']):
+  result=subprocess.run(command+flags,capture_output=True);assert result.returncode!=0
+  assert b'Image memory header differs' in result.stderr
+  assert owned_header.read_bytes()==changed_header
+  assert snapshot=={name:(fixture/name).read_bytes() for name in names}
+ owned_header.write_bytes(original_header)
  # Corrupt only one consumer to prove partial patches do not write other files.
  name='runtime/src/nvn/nvn_frames.cpp';data=(fixture/name).read_bytes()
  old,new=patch.CHANGES[name][0];(fixture/name).write_bytes(data.replace(new.encode(),old.encode()))
  snapshot={name:(fixture/name).read_bytes() for name in names}
  result=subprocess.run(command,capture_output=True);assert result.returncode!=0
  assert snapshot=={name:(fixture/name).read_bytes() for name in names}
-print('PASS: installer LF/CRLF/mixed round-trip, idempotence and partial-patch preflight')
+print('PASS: installer LF/CRLF/mixed source and header round-trip, byte-preserving idempotence, edited-header refusal and partial-patch preflight')

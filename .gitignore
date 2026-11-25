@@ -45,3 +45,12 @@ sp2port-build/
 *.o
 *.a
 port/build/
+
+# Local status, compiled Windows builds and private GPU captures
+/STATUS.md
+*.exe
+*.dll
+*.pdb
+*.dmp
+*.spv
+diagnostics/

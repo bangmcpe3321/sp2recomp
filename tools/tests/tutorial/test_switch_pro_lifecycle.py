@@ -85,7 +85,8 @@ int main(int argc,char** argv){
  // A pre-focus packet must not become a newly "fresh" motion sample.
  packet(1,1000000000);std::this_thread::sleep_for(std::chrono::milliseconds(15));
  assert(!read_switch_pro_motion(0,left,16));
- stream(1,8);assert(read_switch_pro_motion(0,left,16)>0&&left[0].sampling_number<16);
+ auto previous=left[0].sampling_number;
+ stream(1,8);assert(read_switch_pro_motion(0,left,16)>0&&left[0].sampling_number>previous);
  transport=false;
  until([&]{PadState p{};return !read_switch_pro(p);});
  assert(!read_switch_pro_motion(0,left,16));
@@ -95,7 +96,8 @@ int main(int argc,char** argv){
  // Samples from the previous device identity cannot leak across reconnect.
  packet(1);std::this_thread::sleep_for(std::chrono::milliseconds(15));
  assert(!read_switch_pro_motion(0,left,16));
- stream(2,8);assert(read_switch_pro_motion(0,left,16)>0&&left[0].sampling_number<16);
+ previous=left[0].sampling_number;
+ stream(2,8);assert(read_switch_pro_motion(0,left,16)>0&&left[0].sampling_number>previous);
  std::this_thread::sleep_for(std::chrono::milliseconds(120));
  assert(!read_switch_pro_motion(0,left,16)); // stale transport stays neutral
  s.stop=true;s.worker.join();

@@ -15,6 +15,9 @@ function Start-Process {
 function Assert($condition,[string]$message){if(-not $condition){throw $message}}
 try {
  $cases=@(
+  @{Options=@{CachedReadback=$false};Detailed=$false;Feedback=$false;Simulation=$false;Cached=$false},
+  @{Options=@{SynchronousChunks=$false};Detailed=$false;Feedback=$false;Simulation=$false;Chunks=$false},
+  @{Options=@{SynchronousChunks=$true};Detailed=$false;Feedback=$false;Simulation=$false;Chunks=$true},
   @{Options=@{};Detailed=$false;Feedback=$false;Simulation=$false},
   @{Options=@{DetailedStats=$true};Detailed=$true;Feedback=$false;Simulation=$false},
   @{Options=@{PipelineFeedback=$true};Detailed=$false;Feedback=$true;Simulation=$false},
@@ -24,6 +27,8 @@ try {
  foreach($case in $cases){
   $env:NX_RENDER_STATS='1';$env:NX_PRESENT_STATS='1';$env:NX_REPLAY_PROFILE='1'
   $env:NX_PIPELINE_FEEDBACK='1';$env:NX_SIM_RATE_TRACE='1';$env:NX_INPUT_SCRIPT='stale-input.txt'
+  $env:NX_RING_CACHED='0'
+  $env:NX_SYNC_CHUNKS='1';$env:NX_SUBMIT_CHUNK_DRAWS='1'
   $env:NX_NO_FRAME_LIMIT='1';$env:NX_PLAZA_60FPS='1';$env:NX_GPU_TIMESTAMPS='1'
   $options=$case.Options
   & $LaunchScript -GameDirectory $testRoot -Executable 'capture-test-stub.exe' @options | Out-Null
@@ -32,13 +37,19 @@ try {
   Assert ($f.NX_RENDER_STATS -eq $expected -and $f.NX_PRESENT_STATS -eq $expected) ("Detailed statistics must be explicit: expected=$expected got="+($f | ConvertTo-Json -Compress))
   Assert (($f.NX_PIPELINE_FEEDBACK -eq '1') -eq $case.Feedback) 'Pipeline feedback switch or stale environment leak'
   Assert (($f.NX_SIM_RATE_TRACE -eq '1') -eq $case.Simulation) 'Simulation trace switch or stale environment leak'
+  $expectCached=if($case.ContainsKey('Cached')){[bool]$case.Cached}else{$true}
+  Assert (($f.NX_RING_CACHED -eq '1') -eq $expectCached) 'Coherent cached read-back default and explicit opt-out changed'
   Assert ($f.NX_FPS_OVERLAY -eq '1' -and $f.NX_FRAME_CSV.EndsWith('.csv')) 'Overlay and buffered CSV must remain enabled'
+  $expectChunks=if($case.ContainsKey('Chunks')){[bool]$case.Chunks}else{$true}
+  Assert (($f.NX_SYNC_CHUNKS -eq '1') -eq $expectChunks) 'Synchronous chunks must be explicit and ignore stale environment'
+  if($expectChunks){Assert ($f.NX_SUBMIT_CHUNK_DRAWS -eq '150') 'Chunk threshold must remain bounded'}
+  Assert ($f.NX_MOUSE -eq '1' -and $f.NX_MOUSE_GYRO -eq '0') 'Mouse must use right-stick mapping by default'
   Assert ($f.NX_GPU_TIMESTAMPS -eq '0' -and $f.NX_STALL_SAMPLER -eq '0') 'Heavy timestamp/stall diagnostics must remain off'
   Assert ($f.NX_PLAZA_60FPS -eq '0' -and $f.NX_DISABLE_DYNAMIC_RESOLUTION -eq '0') 'Original scene timing and dynamic resolution must remain'
   Assert (-not $f.ContainsKey('NX_INPUT_SCRIPT') -and -not $f.ContainsKey('NX_NO_FRAME_LIMIT') -and -not $f.ContainsKey('NX_REPLAY_PROFILE')) 'Stale input/pacing/profile overrides must be cleared'
   Assert ($launch.NoNewWindow -and $launch.Directory -eq $testRoot) 'Console and working-directory behavior changed'
  }
- Assert ($global:Sp2CaptureLaunchTestRecords.Count -eq 5) 'Each scenario must launch exactly once'
+ Assert ($global:Sp2CaptureLaunchTestRecords.Count -eq 8) 'Each scenario must launch exactly once'
  Write-Output 'PASS actual capture launcher: quiet defaults, explicit diagnostic switches, clean inherited environment, overlay/CSV and original timing'
 } finally {
  $resolved=[System.IO.Path]::GetFullPath($testRoot)

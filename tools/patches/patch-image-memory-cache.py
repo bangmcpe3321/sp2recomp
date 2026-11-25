@@ -45,10 +45,13 @@ def main():
  if len(set(states))!=1:raise SystemExit('Partial image memory patch; no files changed')
  header=a.root/'runtime/src/nvn/image_memory_cache.h'
  payload=(Path(__file__).resolve().parents[1]/'runtime/image_memory_cache.h').read_bytes()
- if header.exists() and header.read_bytes()!=payload:raise SystemExit('Image memory header differs; no files changed')
+ # Git can check out the same owned text with LF or CRLF on different hosts.
+ # Accept only that representation change; preserve existing header bytes.
+ installed=header.read_bytes() if header.exists() else None
+ if installed is not None and installed.replace(b'\r\n',b'\n')!=payload.replace(b'\r\n',b'\n'):raise SystemExit('Image memory header differs; no files changed')
  if a.check:print('Preflight passed');return
  for path,data in pending:path.write_bytes(data)
- if not a.restore:header.write_bytes(payload)
- elif header.exists() and header.read_bytes()==payload:header.unlink()
+ if not a.restore and installed is None:header.write_bytes(payload)
+ elif a.restore and installed is not None:header.unlink()
  print('Restored' if a.restore else 'Applied; rebuild nvn_image.cpp and nvn_frames.cpp')
 if __name__=='__main__':main()

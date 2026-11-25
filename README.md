@@ -13,6 +13,33 @@ structure.
 
 ## Current state
 
+### Latest Windows 1.0 build — November 25, 2026
+
+The launcher uses the current **USA 1.0.0 runtime**. The user reports playable
+FPS with steadier plaza, Tentakeel and stage play after enabling synchronous
+command chunks and coherent cached read-back memory. First-use effects and new
+areas can still stutter; stable 60 FPS in every stage is not established.
+See [command overlap](docs/SYNCHRONOUS_CHUNKS.md),
+[cached read-back](docs/CACHED_READBACK.md), and
+[first-use shader processing](docs/SHADER_FIRST_USE.md).
+
+The Windows launcher now includes an **Inputs** page for saved keyboard/mouse
+bindings, persistent F1 mouse lock, supplied banner artwork, and a custom icon.
+Defaults are **Space: jump, Shift: squid/swim, left-click: shoot, F: confirm**.
+Native Switch Pro controls remain available. See [all controls](docs/CONTROLS.md)
+and [launcher build/install instructions](docs/WINDOWS_LAUNCHER.md).
+
+All **53 runtime regression groups** pass, and the launcher passes its real
+child-process/settings/input checks. These tests use the patched external runtime;
+the repository provides source helpers and original tooling, not a game executable,
+shader cache, extracted game assets, saves, or keys. Launcher image assets are
+supplied artwork; they are separate from the MIT-licensed source tooling.
+
+**5.5.2 / Octo Expansion is a separate experimental development copy.** A local
+check found and mounted the expansion, but rendered incorrectly and stopped with
+`VK_ERROR_DEVICE_LOST`. It is not established as playable and is not selected by
+the normal 1.0 launcher. The following dated sections retain earlier findings.
+
 ### Windows allocation overhead follow-up - November 25, 2026
 
 Retired image memory now has a bounded Windows cache, preserving image contents,
@@ -67,6 +94,44 @@ The following build corrects physical Pro Controller vertical aiming. Tutorial
 intro audio can still run ahead when animation falls below its intended rate;
 the clean manual comparison remains open. See [pitch and audio timing](docs/PRO_PITCH_AUDIO_TIMING.md).
 
+### Stage performance and shadow crash follow-up - November 24, 2026
+
+The runtime now honors worker core assignments and reports the correct guest
+core for scratch storage. Snapshot texture lookups search the requested storage
+address instead of every historical image entry. Both changes are installed in
+the local launcher build, and all 39 runtime regression groups pass. A manual
+stage retest is still required to verify crash recovery and FPS improvements;
+stable 60 FPS is not claimed. See [evidence and rollback](docs/STAGE_PERFORMANCE.md).
+
+The follow-up also keeps native gyro and mouse samples on one clock and avoids
+idle mouse fallback during controller packet gaps. The user confirmed consistent
+vertical aiming. See [gyro repair and validation](docs/GYRO_STREAM_CONTINUITY.md).
+
+The latest build also bounds upload-cache invalidation to ranges that can overlap
+an inline update. [Validation and the current build](docs/UPLOAD_INVALIDATION_RANGE.md)
+record the remaining first-stage FPS comparison.
+
+### Native Windows audio - November 24, 2026
+
+The silent placeholder renderer has been replaced by host audio-packet processing
+and XAudio2 output, including ADPCM playback, mixing and the game's auxiliary
+effect buffers. A live capture contains nonzero stereo PCM. The reported
+auxiliary-buffer crash was corrected; a later font fault received a tested narrow
+recovery. All 35 runtime regression groups pass. Hearing, audio fidelity and
+long-run stability still need manual verification. See
+[implementation, evidence and rollback](docs/NATIVE_AUDIO.md).
+
+### Windows GUI launcher - November 24, 2026
+
+A portable launcher now provides a Play button, saved game/build selection,
+Switch Pro and mouse gyro toggles, FPS overlay, fullscreen, memory settings and
+launch logs. The local desktop shortcut is **sp2recomp Launcher**. The Windows
+build, process regressions and a real game launch passed. See
+[installation and usage](docs/WINDOWS_LAUNCHER.md).
+
+The 60 FPS experiment is on hold following repeated missing-news reports.
+The GUI always uses original game timing with `NX_PLAZA_60FPS=0`.
+
 ### Native Switch Pro input and gameplay options - November 24, 2026
 
 The Windows runtime now reads native Switch Pro Controller buttons, sticks and
@@ -81,10 +146,11 @@ is not claimed. All 32 runtime regression groups pass. See
 [behavior, validation and rollback](docs/CONTROLLER_GAMEPLAY_OPTIONS.md).
 
 A manual comparison found that copying the 60 FPS branch patch hid the news
-studio. An interval-only follow-up then ran the scene too fast. The current option
-executes scene initialization and changes calculation mode together with the
-vblank interval; normal-speed play awaits manual recheck. Physical gyro horizontal aiming was also corrected
-from the user's test feedback.
+studio. An interval-only follow-up ran the scene too fast; coupled timing restored
+normal movement but still hid the broadcast. A follow-up scopes 60 FPS to plaza
+gameplay; this remains experimental and the work is now on hold. The GUI uses
+original game timing. Physical gyro horizontal aiming was also corrected from
+the user's test feedback.
 
 ### Bulk shader-cache build - November 24, 2026
 

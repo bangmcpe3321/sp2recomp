@@ -36,6 +36,7 @@ constexpr uint64_t NXB=0x7100000000ull;
 unsigned mode=3, intervals=0, requested_interval=0, stress_calls=0;
 namespace nx {
 struct CPU { uint64_t x[32]{};bool zf=false; };
+using Fn=void (*)(CPU&);
 std::map<uint64_t,uint64_t> memory;
 template<class T>T ld(uint64_t a) { return T(memory[a]); }
 template<class T>void st(uint64_t a,T v) {memory[a]=uint64_t(v);}
@@ -56,22 +57,38 @@ PATCH_GPU_LINE
 }
 int main(int argc,char** argv) {
  assert(argc==3);bool plaza=std::atoi(argv[1]),disable=std::atoi(argv[2]);
- // sceneEnter must execute its setter and couple full/half-rate calculation
- // to interval 1/2. Interval-only changes run scene logic at the wrong speed.
+ // Loading retains native half-rate mode and interval 2 even with the option on.
  for(mode=0;mode<8;++mode) {
   nx::CPU c;c.x[0]=0x100000;c.x[31]=0x800000;
   nx::memory[NXB+0x2f9d2a0]=0x300000;nx::memory[0x300000]=0x400000;
   nx::memory[0x400550]=0xa4;
   unsigned before=intervals;main_00051BA4(c);
   assert(intervals-before==unsigned(mode==3));
-  if(mode==3)assert(requested_interval==unsigned(plaza?1:2));
-  assert(nx::memory[0x400550]==unsigned(mode==3&&!plaza?0xa5:0xa4));
+  if(mode==3)assert(requested_interval==2);
+  assert(nx::memory[0x400550]==unsigned(mode==3?0xa5:0xa4));
   assert(c.x[31]==0x800000); // Patched branch still follows the normal epilogue.
  }
  // AArch64 NOP changes neither LR nor registers and invokes no stress callback.
  nx::CPU c;c.x[30]=0x123456;stress(c);
  assert(stress_calls==unsigned(!disable));
  assert(c.x[30]==(disable ? 0x123456 : NXB+0x1021fb0));
+ // Repeated plaza -> news -> plaza visits must restore native broadcasts and
+ // full-rate gameplay independently of whether news was skipped on loading.
+ nx::CPU caller;for(unsigned i=0;i<32;++i)caller.x[i]=0x1000+i;
+ caller.zf=true;const nx::CPU saved=caller;
+ nx::memory[NXB+0x2f9d2a8]=0x300008;nx::memory[0x300008]=0x500000;
+ nx::memory[0x400550]=0xa5;nx::memory[0x5000a0]=2;
+ auto setter=[](nx::CPU& copy){
+  nx::memory[copy.x[0]+0xa0]=copy.x[1];
+  // Caller-saved registers and even SP in the temporary context may change.
+  for(unsigned i=0;i<32;++i)copy.x[i]=~uint64_t(i);copy.zf=false;
+ };
+ for(bool gameplay:{true,false,true,false,true}) {
+  nx::sp2::set_plaza_timing(caller,NXB,setter,gameplay);
+  assert(!std::memcmp(caller.x,saved.x,sizeof caller.x)&&caller.zf==saved.zf);
+  assert(nx::memory[0x400550]==unsigned(plaza&&gameplay?0xa4:0xa5));
+  assert(nx::memory[0x5000a0]==unsigned(plaza&&gameplay?1:2));
+ }
  // Startup options are latched; mid-session environment edits cannot mix modes.
  setenv("NX_PLAZA_60FPS",plaza?"0":"1",1);
  setenv("NX_DISABLE_DYNAMIC_RESOLUTION",disable?"0":"1",1);
@@ -126,6 +143,24 @@ with tempfile.TemporaryDirectory(prefix='sp2-gameplay-options-') as tmp:
     first.write_bytes(first.read_bytes().replace(patch.SITES[0][4],patch.FLAG_SETUP+patch.INTERVAL_ONLY))
     run('--check');run();run()
     assert patch.SITES[0][4] in first.read_bytes()
+    first.write_bytes(first.read_bytes().replace(patch.SITES[0][4],patch.COUPLED_VERSION))
+    run('--check');run();run()
+    assert patch.SITES[0][4] in first.read_bytes()
+    # Lifecycle source hooks apply independently, preserve other generated code,
+    # and restore byte-exact before the shared timing header is removed.
+    lifecycle=tools/'patches/patch-plaza-news-timing.py'
+    lifecycle_spec=importlib.util.spec_from_file_location('news_lifecycle',lifecycle)
+    news=importlib.util.module_from_spec(lifecycle_spec);lifecycle_spec.loader.exec_module(news)
+    lifecycle_originals={}
+    for relative,signature,hook in news.HOOKS:
+        data=(root/relative).read_bytes().replace(hook,b'').replace(news.INCLUDE,b'')
+        lifecycle_originals[relative]=data;(fixture/relative).write_bytes(data)
+    def lifecycle_run(*args):
+        subprocess.run([sys.executable,str(lifecycle),'--root',str(fixture),*args],check=True,stdout=subprocess.DEVNULL)
+    lifecycle_run('--check');lifecycle_run();lifecycle_run();lifecycle_run('--check','--restore')
+    run('--check','--restore',success=False)
+    lifecycle_run('--restore');lifecycle_run('--restore')
+    assert all((fixture/p).read_bytes()==data for p,data in lifecycle_originals.items())
     run('--restore','--check');run('--restore');run('--restore')
     assert all((fixture/p).read_bytes()==data for p,data in originals.items())
     assert not (fixture / 'runtime/src/sp2_gameplay_options.h').exists()
@@ -142,4 +177,4 @@ with tempfile.TemporaryDirectory(prefix='sp2-gameplay-options-') as tmp:
     run(success=False)
     assert (fixture / patch.SITES[0][0]).read_bytes()==originals[patch.SITES[0][0]]
     assert not (fixture / 'runtime/src/sp2_gameplay_options.h').exists()
-print('PASS coupled full/half-rate mode and 30/60 interval, independent options, NOP registers, build/anchor rejection, upgrade and byte-exact rollback')
+print('PASS native loading/news timing, 60 Hz gameplay lifecycle, repeated visits, caller registers, independent options, upgrade and byte-exact rollback')

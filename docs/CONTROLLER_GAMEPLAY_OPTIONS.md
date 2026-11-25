@@ -1,5 +1,10 @@
 # Native Switch Pro input and US 1.0.0 gameplay options
 
+The user has put the 60 FPS experiment on hold after repeated missing-news
+reports. The [Windows GUI launcher](WINDOWS_LAUNCHER.md) explicitly disables
+`NX_PLAZA_60FPS` and uses original timing. The source experiments below are
+retained for future investigation; their news visibility is not confirmed.
+
 The Windows runtime supports native Nintendo Switch Pro Controller buttons,
 sticks, accelerometer and gyro through SDL 3.4.20 HIDAPI. Separate startup
 options provide plaza 60 FPS and disabled dynamic resolution, based on the
@@ -16,7 +21,7 @@ the addresses below are the corresponding flat-image/code offsets.
 
 | Option | Original instruction | Replacement | Generated implementation |
 | --- | --- | --- | --- |
-| `NX_PLAZA_60FPS=1` | `0x51C2C`: `81010054`, `b.ne +0x30` | Reference patch: `0C000014`, `b +0x30` | Execute the scene setup and interval setter; select full-rate calculation with interval 1 instead of half-rate calculation with interval 2 for mode 3. |
+| `NX_PLAZA_60FPS=1` | `0x51C2C`: `81010054`, `b.ne +0x30` | Reference patch: `0C000014`, `b +0x30` | Keep native loading/news timing; switch to full-rate calculation and interval 1 at `SeqMgrPlaza::stateEnterProgress`. News broadcasts explicitly restore half-rate calculation and interval 2. |
 | `NX_DISABLE_DYNAMIC_RESOLUTION=1` | `0x1021FAC`: `768F0F94`, `bl agl::fctr::GPUStressChecker::calc` | `1F2003D5`, `nop` | Skip this GPU stress/scaling update call in `gsys::SystemTask::invokeCalcFrame_`, preserving the guest LR. |
 
 The first implementation copied the branch patch literally. User-assisted A/B
@@ -25,12 +30,18 @@ while the control and fixed-resolution-only runs showed it correctly. The skippe
 block sets bit 0 at `gsys::SystemTask + 0x550`. `SystemTask::preCalc_` propagates
 that bit into the framework's half-rate calculation mode at `+0x209`.
 
-Changing only the interval to 1 made the plaza/news run too fast in the next
-manual test. The current implementation changes calculation mode and interval
-together: full-rate mode with interval 1 when enabled, the original half-rate mode
-with interval 2 when disabled. It still executes the scene setup and calls the
-original interval setter explicitly. The helper upgrades both earlier versions.
-Normal-speed movement and news animations are awaiting the latest manual retest.
+Changing only the interval to 1 made the plaza/news run too fast. Changing
+calculation mode and interval together restored normal movement, confirmed by the
+user, but the broadcast's 3D studio still disappeared in full-rate mode.
+
+The current implementation limits 60 FPS to plaza gameplay. Loading and news use
+the original half-rate mode and interval 2. `SeqPlazaNews::stateEnterPreNews`
+explicitly selects native broadcast timing; `SeqMgrPlaza::stateEnterProgress`
+selects full-rate mode and interval 1 when gameplay begins. This also handles
+loads that skip news. The original scene-entry setup and interval setter remain
+intact. Timing callbacks use a copy of the CPU context to preserve the caller's
+registers. The helpers upgrade prior versions; the latest broadcast is awaiting
+manual verification. **News remains at its original 30 FPS.**
 
 Reaching a sustained 60 FPS still
 depends on CPU/GPU work and pipeline compilation; no stable-60 benchmark is
@@ -60,6 +71,11 @@ feedback. The yaw correction is applied before integration, keeping emitted
 angular velocity, angle and quaternion orientation consistent; vertical aiming
 and stick mapping are unchanged.
 
+The [gyro continuity follow-up](GYRO_STREAM_CONTINUITY.md) preserves sample
+numbering across mouse capture, focus changes and reconnect, and prevents an
+idle mouse fallback during native packet gaps. Consistent vertical aiming was
+confirmed by the user in the installed follow-up.
+
 Focus loss, mouse capture, disconnect, and long transport stalls prevent stale
 motion from reaching the game. Reconnect resets history and calibration. Holding
 right mouse or F1 capture selects mouse gyro; releasing it restores physical
@@ -79,13 +95,15 @@ Apply after the existing mouse motion stream patch:
 python3 tools/patches/patch-switch-pro-controller.py --root "$HOME/sp2port"
 python3 tools/patches/patch-gameplay-options.py --root "$HOME/sp2port" \
   --nso /path/to/original/exefs/main
+python3 tools/patches/patch-plaza-news-timing.py --root "$HOME/sp2port"
 python3 tools/verify-tutorial-runtime.py --root "$HOME/sp2port"
 ```
 
 The gameplay helper verifies NSO build ID, the original scene branch, interval
 argument and GPU stress call, plus
 both generated source anchors before writing. It does not modify the NSO, flat
-image or game assets. Rebuild `platform_win.cpp`, `code_006.cpp`, and `code_348.cpp`;
+image or game assets. Rebuild `platform_win.cpp`, `code_006.cpp`, `code_204.cpp`,
+`code_206.cpp`, and `code_348.cpp`;
 changing any controller header also requires rebuilding `platform_win.cpp` because
 the local incremental builder does not track header dependencies.
 
@@ -108,6 +126,7 @@ To roll back, use the original launcher or the first new launcher with both
 gameplay variables unset/zero. Source helpers support `--check` and `--restore`:
 
 ```sh
+python3 tools/patches/patch-plaza-news-timing.py --root "$HOME/sp2port" --restore
 python3 tools/patches/patch-gameplay-options.py --root "$HOME/sp2port" --restore
 python3 tools/patches/patch-switch-pro-controller.py --root "$HOME/sp2port" --restore
 ```
@@ -121,8 +140,9 @@ after apply/idempotence/restore in isolated fixtures.
 The Windows candidate compiled 85 runtime units at O2 and two changed guest units
 at O1, reusing 520 current guest objects and retaining earlier graphics/font/wait
 fixes. Candidate SHA-256:
-`fefb7df7f693dacc54b057e12d3566c6414c658816c492a312400ae92f8fb81c`.
-This follow-up recompiles the scene-entry unit and the Windows controller unit;
+`2a026ae76f75bf9889220ccd296c66aee7625d4b561be9b44ff544428076ec36`.
+This follow-up recompiles the scene-entry, gameplay-entry, news-entry,
+GPU-stress-option, and Windows controller units;
 the other candidate objects are reused.
 
 The connected Bluetooth Nintendo Switch Pro Controller produced 300 gyro and
@@ -134,8 +154,9 @@ CPU sanitizer tests cover Nintendo button chords/full signed stick range,
 physical motion units/axes, independent reference rotations, irregular sampling,
 bias, stalls, shared histories, actual worker reconnect/identity filtering,
 old packets after focus regain, and missing-DLL/disabled fallback. Gameplay tests
-exercise the full generated scene-enter function, matched full/half-rate modes
-and interval 1/2 requests, all option combinations, NOP/LR preservation, and rejected build or
+exercise the full generated scene-enter function, native loading, news/plaza
+timing transitions and repeat visits, callback register preservation,
+all option combinations, NOP/LR preservation, and rejected build or
 source mismatches. In-game physical aiming and plaza performance still need a
 manual play check; the device probe does not establish tutorial completion.
 

@@ -1,0 +1,183 @@
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="sp2recomp Launcher" Width="1000" Height="740" MinWidth="850" MinHeight="640"
+        WindowStartupLocation="CenterScreen" Background="#111016" Foreground="#F5F3FA"
+        FontFamily="Segoe UI" FontSize="14">
+  <Window.Resources>
+    <SolidColorBrush x:Key="Muted" Color="#ACA6BC"/>
+    <Style TargetType="Button">
+      <Setter Property="Background" Value="#2A2635"/>
+      <Setter Property="Foreground" Value="#F5F3FA"/>
+      <Setter Property="BorderThickness" Value="0"/>
+      <Setter Property="Padding" Value="18,12"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Border x:Name="Surface" Background="{TemplateBinding Background}" CornerRadius="8" Padding="{TemplateBinding Padding}">
+              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Surface" Property="Opacity" Value="0.8"/></Trigger>
+              <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="Surface" Property="BorderBrush" Value="#C9FC45"/><Setter TargetName="Surface" Property="BorderThickness" Value="2"/></Trigger>
+              <Trigger Property="IsEnabled" Value="False"><Setter TargetName="Surface" Property="Opacity" Value="0.5"/></Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+    <Style TargetType="TextBox">
+      <Setter Property="Background" Value="#15121D"/><Setter Property="Foreground" Value="#F5F3FA"/>
+      <Setter Property="BorderBrush" Value="#4C425D"/><Setter Property="CaretBrush" Value="#C9FC45"/>
+      <Setter Property="Padding" Value="12,10"/><Setter Property="VerticalContentAlignment" Value="Center"/>
+    </Style>
+    <Style TargetType="CheckBox">
+      <Setter Property="Foreground" Value="#F5F3FA"/><Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="VerticalContentAlignment" Value="Center"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="CheckBox">
+            <StackPanel Orientation="Horizontal">
+              <Border x:Name="Track" Width="40" Height="23" Background="#484151" CornerRadius="12" Margin="0,0,12,0">
+                <Ellipse x:Name="Thumb" Width="15" Height="15" Fill="#D8D3E3" HorizontalAlignment="Left" Margin="4,0"/>
+              </Border>
+              <ContentPresenter VerticalAlignment="Center"/>
+            </StackPanel>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsChecked" Value="True"><Setter TargetName="Track" Property="Background" Value="#C9FC45"/><Setter TargetName="Thumb" Property="Fill" Value="#222813"/><Setter TargetName="Thumb" Property="HorizontalAlignment" Value="Right"/></Trigger>
+              <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="Track" Property="BorderBrush" Value="White"/><Setter TargetName="Track" Property="BorderThickness" Value="2"/></Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+  </Window.Resources>
+  <Grid Background="#111016">
+    <Grid.ColumnDefinitions><ColumnDefinition Width="180"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+    <Border Background="#1B1723" BorderBrush="#2D2738" BorderThickness="0,0,1,0">
+      <Grid Margin="18,28,18,22">
+        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+        <StackPanel>
+          <TextBlock Text="sp2" FontSize="42" FontWeight="Black" Foreground="#C9FC45"/>
+          <TextBlock Text="RECOMP" FontWeight="Bold" FontSize="16" Margin="2,-5,0,0"/>
+          <TextBlock Text="PC LAUNCHER" FontSize="10" Foreground="{StaticResource Muted}" Margin="2,10,0,36"/>
+          <Button x:Name="HomeNav" Content="Play" Background="#47325F" HorizontalContentAlignment="Left" Margin="0,0,0,8"/>
+          <Button x:Name="SettingsNav" Content="Settings" Background="Transparent" Margin="0,0,0,8"/>
+          <Button x:Name="InputsNav" Content="Inputs" Background="Transparent" Margin="0,0,0,8"/>
+          <Button x:Name="AboutNav" Content="About" Background="Transparent"/>
+        </StackPanel>
+        <StackPanel Grid.Row="2">
+          <TextBlock Text="WINDOWS / VULKAN" FontSize="10" Foreground="{StaticResource Muted}"/>
+          <TextBlock Text="USA · 1.0.0" FontSize="12" Margin="0,6,0,0"/>
+        </StackPanel>
+      </Grid>
+    </Border>
+    <Grid Grid.Column="1" Margin="30,28,30,24">
+      <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+      <Grid>
+        <TextBlock Text="Splatoon 2" FontSize="18" FontWeight="SemiBold"/>
+        <Border Background="#272033" CornerRadius="6" Padding="10,5" HorizontalAlignment="Right">
+          <TextBlock Text="NATIVE PC RECOMPILATION" FontSize="10" Foreground="#C4ACEC"/>
+        </Border>
+      </Grid>
+      <ScrollViewer x:Name="ContentScroll" Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Margin="0,24,0,22">
+        <Grid>
+          <StackPanel x:Name="HomePage">
+            <Border Background="#282036" CornerRadius="14" ClipToBounds="True" Height="250">
+              <Grid>
+                <Border x:Name="HeroArtwork" CornerRadius="14"/>
+                <Border CornerRadius="14"><Border.Background><LinearGradientBrush StartPoint="0,0.5" EndPoint="1,0.5"><GradientStop Color="#F2191421" Offset="0"/><GradientStop Color="#B21B1524" Offset="0.42"/><GradientStop Color="#101B1524" Offset="1"/></LinearGradientBrush></Border.Background></Border>
+                <StackPanel Margin="25,26,0,0" HorizontalAlignment="Left">
+                  <TextBlock Text="YOUR NEXT SESSION" Foreground="#C5ADD9" FontSize="11" FontWeight="Bold"/>
+                  <TextBlock Text="BACK TO&#10;INKOPOLIS." FontSize="39" FontWeight="Black" LineHeight="43" Margin="0,12,0,12"/>
+                  <TextBlock Text="Pick up your controller. Make some ink." FontSize="12" Foreground="#D0C5DC"/>
+                </StackPanel>
+              </Grid>
+            </Border>
+            <TextBlock Text="SESSION SETTINGS" Foreground="{StaticResource Muted}" FontSize="11" FontWeight="Bold" Margin="0,23,0,12"/>
+            <UniformGrid Columns="3">
+              <Border Background="#211C2B" CornerRadius="10" Padding="14,18" Margin="0,0,8,0">
+                <StackPanel><CheckBox x:Name="ProControl" Content="Switch Pro" AutomationProperties.Name="Native Switch Pro Controller"/>
+                  <TextBlock Text="Buttons, sticks + gyro" Foreground="{StaticResource Muted}" FontSize="11" Margin="0,12,0,0"/></StackPanel>
+              </Border>
+              <Border Background="#211C2B" CornerRadius="10" Padding="14,18" Margin="0,0,8,0">
+                <StackPanel><CheckBox x:Name="MouseControl" Content="Mouse gyro"/>
+                  <TextBlock Text="F1 lock / right mouse hold" Foreground="{StaticResource Muted}" FontSize="11" Margin="0,12,0,0"/></StackPanel>
+              </Border>
+              <Border Background="#211C2B" CornerRadius="10" Padding="14,18">
+                <StackPanel><CheckBox x:Name="FpsControl" Content="FPS counter"/>
+                  <TextBlock Text="Toggle in game with F3" Foreground="{StaticResource Muted}" FontSize="11" Margin="0,12,0,0"/></StackPanel>
+              </Border>
+            </UniformGrid>
+            <TextBlock x:Name="GameSummary" TextWrapping="Wrap" Foreground="{StaticResource Muted}" FontSize="12" Margin="0,19,0,0"/>
+          </StackPanel>
+          <StackPanel x:Name="InputsPage" Visibility="Collapsed">
+            <TextBlock Text="Your controls." FontSize="30" FontWeight="Bold"/>
+            <TextBlock Text="Keyboard + mouse" Foreground="#C9FC45" Margin="0,8,0,10"/>
+            <TextBlock Text="Click a binding, then press a key or mouse button. Esc cancels recording. Changes are saved for your next game session." TextWrapping="Wrap" Foreground="{StaticResource Muted}" LineHeight="22"/>
+            <Border Background="#211C2B" CornerRadius="10" Padding="16" Margin="0,16,0,10">
+              <StackPanel><TextBlock Text="F1 locks / unlocks the mouse. F3 toggles FPS; F11 toggles fullscreen." TextWrapping="Wrap"/><TextBlock Text="Controller buttons stay native. Right mouse also provides temporary camera capture. Mouse aim mode is selected on the Play page." Foreground="{StaticResource Muted}" FontSize="12" TextWrapping="Wrap" Margin="0,6,0,0"/></StackPanel>
+            </Border>
+            <TextBlock x:Name="BindingStatus" Text="Select a binding to change it." Foreground="#C9FC45" TextWrapping="Wrap" Margin="0,8,0,8"/>
+            <StackPanel x:Name="BindingRows"/>
+            <Button x:Name="ResetInputsControl" Content="Restore input defaults" HorizontalAlignment="Left" Margin="0,20,0,0"/>
+          </StackPanel>
+          <StackPanel x:Name="SettingsPage" Visibility="Collapsed">
+            <TextBlock Text="Make it yours." FontSize="30" FontWeight="Bold"/>
+            <TextBlock Text="Saved automatically for your next session." Foreground="{StaticResource Muted}" Margin="0,6,0,24"/>
+            <TextBlock Text="GAME FOLDER" FontSize="11" Foreground="{StaticResource Muted}" Margin="0,0,0,8"/>
+            <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+              <TextBox x:Name="FolderControl" AutomationProperties.Name="Game folder"/>
+              <Button x:Name="BrowseFolder" Grid.Column="1" Content="Browse" Margin="10,0,0,0"/>
+            </Grid>
+            <TextBlock Text="GAME EXECUTABLE" FontSize="11" Foreground="{StaticResource Muted}" Margin="0,20,0,8"/>
+            <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+              <TextBox x:Name="ExeControl" AutomationProperties.Name="Game executable"/>
+              <Button x:Name="BrowseExe" Grid.Column="1" Content="Choose" Margin="10,0,0,0"/>
+            </Grid>
+            <TextBlock Text="The folder should contain private\analysis\main.bin and private\extract\romfs." TextWrapping="Wrap" Foreground="{StaticResource Muted}" FontSize="12" Margin="0,10,0,22"/>
+            <Border Background="#211C2B" CornerRadius="10" Padding="20">
+              <StackPanel>
+                <CheckBox x:Name="FullscreenControl" Content="Start in fullscreen"/>
+                <TextBlock Text="F11 switches between windowed and fullscreen." Foreground="{StaticResource Muted}" FontSize="12" Margin="52,7,0,20"/>
+                <CheckBox x:Name="FixedControl" Content="Disable dynamic resolution"/>
+                <TextBlock Text="Keep the configured render resolution. Requires the current controller build." TextWrapping="Wrap" Foreground="{StaticResource Muted}" FontSize="12" Margin="52,7,0,20"/>
+                <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="90"/></Grid.ColumnDefinitions>
+                  <StackPanel><TextBlock Text="Memory limit (GB)"/><TextBlock Text="13 GB is the current default." Foreground="{StaticResource Muted}" FontSize="12" Margin="0,5,0,0"/></StackPanel>
+                  <TextBox x:Name="MemoryControl" Grid.Column="1" AutomationProperties.Name="Memory limit in gigabytes"/>
+                </Grid>
+              </StackPanel>
+            </Border>
+            <Button x:Name="ResetControl" Content="Restore defaults" HorizontalAlignment="Left" Margin="0,20,0,0"/>
+          </StackPanel>
+          <StackPanel x:Name="AboutPage" Visibility="Collapsed">
+            <TextBlock Text="Recompiled. Ready to play." FontSize="30" FontWeight="Bold" TextWrapping="Wrap"/>
+            <TextBlock Text="sp2recomp is a native PC recompilation of Splatoon 2 USA 1.0.0. The original game's AArch64 code runs as recompiled x86-64 code with a Vulkan runtime." TextWrapping="Wrap" Foreground="{StaticResource Muted}" LineHeight="24" Margin="0,18,0,22"/>
+            <Border Background="#211C2B" CornerRadius="10" Padding="22">
+              <StackPanel>
+                <TextBlock Text="DEFAULT CONTROLS — CHANGE THEM IN INPUTS" FontWeight="Bold" Foreground="#C9FC45" FontSize="11"/>
+                <TextBlock Text="WASD / arrows    Move / menu stick&#10;Mouse movement    Aim while locked&#10;F1    Lock / unlock mouse&#10;Right mouse    Temporary mouse look&#10;F    A — confirm / interact&#10;Space    B — jump / back&#10;J    X — game menu&#10;K    Y — reset camera&#10;Q / E    L / R (R: sub weapon)&#10;Shift / Z    ZL — squid / swim&#10;Left click / C    ZR — shoot&#10;Enter / Esc    + / −&#10;F3    FPS overlay&#10;F11 / Alt+Enter    Fullscreen&#10;[ / ]    Sensitivity (mouse gyro only)&#10;Switch Pro    Native buttons, sticks and gyro" LineHeight="28" Margin="0,14,0,0"/>
+              </StackPanel>
+            </Border>
+            <TextBlock Text="Default mouse aiming uses the right stick. For vertical mouse aim, turn Motion Controls OFF in the game’s TV/Tabletop options. F1 lock releases when you switch away; press F1 again after returning." TextWrapping="Wrap" Foreground="{StaticResource Muted}" Margin="0,12,0,0"/>
+            <TextBlock Text="The port is in development. Game data is supplied locally. Each launch writes a log you can open below." TextWrapping="Wrap" Foreground="{StaticResource Muted}" LineHeight="24" Margin="0,22,0,20"/>
+            <Button x:Name="RepoControl" Content="View project on GitHub ↗" HorizontalAlignment="Left"/>
+          </StackPanel>
+        </Grid>
+      </ScrollViewer>
+      <Border Grid.Row="2" BorderBrush="#302938" BorderThickness="0,1,0,0" Padding="0,20,0,0">
+        <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="160"/></Grid.ColumnDefinitions>
+          <StackPanel Margin="0,0,16,0">
+            <TextBlock x:Name="StatusControl" Text="Checking game files…" FontWeight="SemiBold" TextWrapping="Wrap"/>
+            <TextBlock Text="Original game timing" FontSize="11" Foreground="{StaticResource Muted}" Margin="0,5,0,10"/>
+            <StackPanel Orientation="Horizontal">
+              <Button x:Name="OpenFolderControl" Content="Game folder" Padding="10,6" FontSize="11" Margin="0,0,8,0"/>
+              <Button x:Name="OpenLogControl" Content="Launch logs" Padding="10,6" FontSize="11"/>
+            </StackPanel>
+          </StackPanel>
+          <Button x:Name="PlayControl" Grid.Column="1" Content="PLAY  ▶" FontWeight="Black" FontSize="20" Foreground="#202613" Background="#C9FC45" Height="64" VerticalAlignment="Center" AutomationProperties.Name="Play game"/>
+        </Grid>
+      </Border>
+    </Grid>
+  </Grid>
+</Window>

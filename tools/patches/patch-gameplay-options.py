@@ -21,10 +21,11 @@ FLAG_SETUP = OLD_FLAG + b'''    { uint64_t a = c.x[8] + 0x550ull; nx::st<uint32_
     { uint64_t a = c.x[8]; c.x[0] = uint64_t(nx::ld<uint64_t>(a)); } // ldr x0, [x8]
 '''
 COUPLED_FLAG = b'    c.x[9] = nx::sp2::plaza_60fps_enabled() ? uint32_t(c.x[9]) & ~1u : uint32_t(c.x[9]) | 1u; // PATCH-SP2-FRAME-MODE: match full/half-rate calculation to vblank interval\n'
+COUPLED_VERSION = FLAG_SETUP.replace(OLD_FLAG, COUPLED_FLAG) + INTERVAL_ONLY
 SITES = (
     ('gen/main/code_006.cpp', 0x51C54, bytes.fromhex('e1031f32'),
      FLAG_SETUP + OLD_SETTER,
-     FLAG_SETUP.replace(OLD_FLAG, COUPLED_FLAG) + INTERVAL_ONLY),
+     FLAG_SETUP + OLD_SETTER + b'    // PATCH-SP2-PLAZA-NATIVE-ENTRY: loading and news retain native timing; gameplay switches at stateEnterProgress.\n'),
     ('gen/main/code_348.cpp', 0x1021FAC, bytes.fromhex('768f0f94'),
      b'    c.x[30] = NXB + 0x1021fb0ull; main_01405D84(c); // bl #0x1405d84\n',
      b'    if (!nx::sp2::dynamic_resolution_disabled()) { c.x[30] = NXB + 0x1021fb0ull; main_01405D84(c); } // PATCH-SP2-DYNAMIC-RESOLUTION: nop\n'),
@@ -40,8 +41,14 @@ def main():
     args = parser.parse_args()
     root = args.root.resolve()
     expected_header = (Path(__file__).resolve().parent.parent / 'runtime/sp2_gameplay_options.h').read_bytes()
+    legacy_header = expected_header.split(b'// PATCH-SP2-NEWS-TIMING\n')[0]
     header = root / 'runtime/src/sp2_gameplay_options.h'
     try:
+        if args.restore:
+            for relative in ('gen/main/code_204.cpp', 'gen/main/code_206.cpp'):
+                path = root / relative
+                if path.is_file() and b'PATCH-SP2-NEWS-LIFECYCLE' in path.read_bytes():
+                    raise ValueError('Restore patch-plaza-news-timing.py first; its hooks require the timing header')
         if not args.restore:
             if not args.nso:
                 parser.error('--nso is required to verify the supported build ID')
@@ -63,6 +70,12 @@ def main():
             path = root / relative
             data = path.read_bytes()
             if relative == SITES[0][0]:
+                if data.count(COUPLED_VERSION) == 1 and data.count(ORIGINAL_BRANCH) == 1 and data.count(INCLUDE) == 1:
+                    states.append(True)
+                    normalized = data.replace(COUPLED_VERSION, old, 1)
+                    result = normalized.replace(INCLUDE, b'', 1) if args.restore else normalized.replace(old, new, 1)
+                    changes.append((path, result))
+                    continue
                 if data.count(FLAG_SETUP + INTERVAL_ONLY) == 1 and data.count(ORIGINAL_BRANCH) == 1 and data.count(INCLUDE) == 1:
                     states.append(True)
                     normalized = data.replace(INTERVAL_ONLY, OLD_SETTER, 1)
@@ -82,7 +95,7 @@ def main():
             if data.count(old) == 1 and new not in data and INCLUDE not in data:
                 states.append(False)
                 result = INCLUDE + data.replace(old, new, 1)
-            elif data.count(new) == 1 and old not in data and data.count(INCLUDE) == 1:
+            elif data.count(new) == 1 and data.count(old) == new.count(old) and data.count(INCLUDE) == 1:
                 states.append(True)
                 result = data.replace(new, old, 1).replace(INCLUDE, b'', 1)
             else:
@@ -91,11 +104,15 @@ def main():
                 changes.append((path, result))
         if len(set(states)) != 1:
             raise ValueError('Partial installation; no files changed')
-        if header.exists() and header.read_bytes() != expected_header:
+        if header.exists() and header.read_bytes() not in (expected_header, legacy_header):
             raise ValueError('Options header differs; no files changed')
         if header.exists() != states[0]:
             raise ValueError('Options header/source state mismatch')
         if not changes:
+            if not args.restore and header.read_bytes() == legacy_header:
+                if not args.check: header.write_bytes(expected_header)
+                print('Can upgrade header' if args.check else 'Upgraded timing header; rebuild affected guest units')
+                return
             print('Already restored' if args.restore else 'Already applied')
             return
         if args.check:

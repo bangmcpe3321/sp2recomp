@@ -1,5 +1,40 @@
 # sp2recomp
 
+## Bản Windows 1.0 hiện tại — 25/11/2026
+
+Launcher dùng runtime **USA 1.0.0** mới nhất. Người dùng xác nhận FPS đã chơi
+được và ổn định hơn trong plaza, Tentakeel và màn chơi. Cảnh/hiệu ứng xuất hiện
+lần đầu vẫn có thể giật; chưa xác nhận 60 FPS ổn định trong mọi màn.
+
+Trang **Inputs** cho phép đổi phím và nút chuột, lưu tự động cho lần chạy sau.
+Mặc định: **Space nhảy, Shift bơi/dạng mực, chuột trái bắn, F xác nhận**.
+**F1** khóa/mở chuột. Launcher có ảnh nền banner và biểu tượng mới.
+Xem [điều khiển](docs/CONTROLS.md), [launcher](docs/WINDOWS_LAUNCHER.md),
+[đồng bộ lệnh GPU](docs/SYNCHRONOUS_CHUNKS.md) và
+[bộ nhớ đọc ngược](docs/CACHED_READBACK.md).
+
+Cả **53 nhóm kiểm tra runtime** và kiểm tra launcher đều đạt. Repo chứa công cụ,
+source helper và ảnh launcher được cung cấp; không có file game thực thi, dữ liệu
+game đã giải nén, cache shader, save hoặc khóa.
+
+**5.5.2 / Octo Expansion** là bản thử nghiệm riêng. DLC đã được nhận và mount,
+nhưng hình ảnh lỗi và dừng với `VK_ERROR_DEVICE_LOST`; chưa chơi được và không
+được launcher 1.0 chọn mặc định. Các ghi chú cũ bên dưới được giữ để tham khảo.
+
+> Đã thay renderer âm thanh giả bằng bộ xử lý audio trên PC và đầu ra XAudio2,
+> hỗ trợ ADPCM, trộn âm và buffer hiệu ứng do game xử lý. Bản ghi thử có PCM stereo
+> khác 0. Đã sửa lỗi thứ tự con trỏ buffer gây crash; lỗi font phát hiện sau đó có
+> cách xử lý đã qua kiểm tra. Cả 35 nhóm kiểm tra runtime đều đạt. Chất lượng âm
+> thanh nghe được và độ ổn định lâu dài vẫn cần thử trực tiếp.
+> Xem [bằng chứng và hướng dẫn](docs/NATIVE_AUDIO.md).
+
+> Launcher GUI Windows đã được tạo: nút Play, chọn thư mục và bản game, lưu tùy
+> chọn tay cầm Switch Pro, gyro chuột, FPS, toàn màn hình và log mỗi lần chạy.
+> Shortcut trên Desktop là **sp2recomp Launcher**. Build, kiểm tra tiến trình và
+> khởi chạy game thật đều đạt. Xem [hướng dẫn launcher](docs/WINDOWS_LAUNCHER.md).
+> Tạm dừng thử nghiệm 60 FPS theo yêu cầu người dùng; launcher luôn dùng tốc độ
+> gốc với `NX_PLAZA_60FPS=0`.
+
 > Cập nhật 24/11/2026: đã thêm nút, cần analog và gyro thật của Switch Pro
 > Controller qua SDL3 HIDAPI. Tay cầm Bluetooth đã cung cấp luồng cảm biến 200 Hz.
 > Hai tùy chọn riêng cho bản US 1.0.0 cho phép plaza chạy ở 60 FPS và tắt độ phân
@@ -7,10 +42,10 @@
 > Chưa xác nhận ngắm trong game, 60 FPS ổn định hoặc phần credits Octo Expansion.
 > Xem [hướng dẫn, kiểm chứng và hoàn tác](docs/CONTROLLER_GAMEPLAY_OPTIONS.md).
 
-> Tùy chọn 60 FPS nay đồng bộ chế độ cập nhật game với khoảng chờ vblank và vẫn
-> chạy phần khởi tạo cảnh; đang chờ kiểm tra lại tốc độ chơi. Bản chỉ đổi vblank
-> trước đó làm cảnh chạy quá nhanh. Chiều ngắm ngang của gyro thật cũng đã được
-> chỉnh lại theo phản hồi thử nghiệm.
+> Tốc độ di chuyển đã được người dùng xác nhận trở lại bình thường. Tùy chọn 60 FPS
+> được thử giới hạn vào lúc bắt đầu chơi trong plaza, giữ phần tải và bản tin ở
+> 30 FPS. Thử nghiệm này chưa được xác nhận và hiện tạm dừng. Chiều ngắm ngang
+> của gyro thật cũng đã được chỉnh lại.
 
 > Đã sửa việc bị chậm/kẹt như đứng trên mực địch dù nền hướng dẫn không có mực.
 > Người dùng đã xác nhận hết hiện tượng này. Bộ đếm GPU nay trả số mẫu thực
